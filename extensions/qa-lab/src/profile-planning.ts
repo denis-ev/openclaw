@@ -1,3 +1,4 @@
+import type { QaRunnerTransportImplementationCapability } from "openclaw/plugin-sdk/qa-runner-runtime";
 // Qa Lab plugin module owns canonical taxonomy profile membership planning.
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -123,6 +124,9 @@ export function resolveQaRunProfileExecutionSelection(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
   executionKind?: QaSeedScenarioWithSource["execution"]["kind"];
   supportsChannel?: (channel: string) => boolean;
+  resolveImplementationCapabilities?: (
+    channel?: string,
+  ) => readonly QaRunnerTransportImplementationCapability[];
 }): QaRunProfileExecutionSelection {
   const selectedScenarios: QaSeedScenarioWithSource[] = [];
   const excludedScenarios: QaRunProfileExecutionSelection["excludedScenarios"] = [];
@@ -150,6 +154,7 @@ export function resolveQaRunProfileExecutionSelection(params: {
         channelDriver: params.channelDriver,
         channel: effectiveChannel,
         claudeCliAuthMode: params.claudeCliAuthMode,
+        implementationCapabilities: params.resolveImplementationCapabilities?.(effectiveChannel),
       }),
     );
     if (
@@ -191,6 +196,9 @@ export function resolveQaProfileScenarios(params: {
   eligibleChannels?: readonly string[];
   executionKind?: QaSeedScenarioWithSource["execution"]["kind"];
   requireDeclaredChannel?: boolean;
+  resolveImplementationCapabilities?: (
+    channel?: string,
+  ) => readonly QaRunnerTransportImplementationCapability[];
   scenarioIds?: readonly string[];
 }) {
   const membership = resolveQaRunProfileMembership({
@@ -236,6 +244,7 @@ export function resolveQaProfileScenarios(params: {
         channelDriver,
         channel: channel ?? scenario.execution.channel,
         executionKind: params.executionKind,
+        resolveImplementationCapabilities: params.resolveImplementationCapabilities,
       }).excludedScenarios.flatMap((entry) => entry.reasons),
     );
     return { scenario, reasons: uniqueStrings(reasons) };

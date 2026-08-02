@@ -5,11 +5,13 @@ describe("QA scenario module flow", () => {
   it("resolves a module export argument against the loaded scenario module", () => {
     const flow = qaScenarioModuleFlow.moduleSchema.parse({
       module: "./scenario-runtime.js",
+      requiredImplementationCapabilities: ["adapter-prepared-flow-context"],
       call: "runScenario",
       args: [{ expr: "scenarioContext" }, { moduleExport: "scenarioImplementation" }],
     });
 
     expect(qaScenarioModuleFlow.resolveFlow(flow, "Scenario title")).toMatchObject({
+      requiredImplementationCapabilities: ["adapter-prepared-flow-context"],
       steps: [
         {
           actions: [
@@ -28,6 +30,16 @@ describe("QA scenario module flow", () => {
         },
       ],
     });
+  });
+
+  it("rejects unknown implementation requirements", () => {
+    expect(() =>
+      qaScenarioModuleFlow.moduleSchema.parse({
+        module: "./scenario-runtime.js",
+        requiredImplementationCapabilities: ["normalized-flow-execution"],
+        call: "runScenario",
+      }),
+    ).toThrow();
   });
 
   it("rejects malformed module export arguments", () => {

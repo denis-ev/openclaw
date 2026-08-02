@@ -13,6 +13,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runThreadRootPreservationScenario
   args:
     - expr: "scenarioContext"

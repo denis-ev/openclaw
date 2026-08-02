@@ -83,6 +83,25 @@ function createPendingCleanup() {
 }
 
 describe("qa transport registry", () => {
+  it("rejects factories that advertise prepared flow context without implementing it", async () => {
+    const factory: QaTransportAdapterFactory = {
+      id: "incomplete",
+      capabilities: ["adapter-prepared-flow-context"],
+      matches: () => true,
+      async create() {
+        return createAdapterDefinition();
+      },
+    };
+
+    await expect(
+      createQaTransportAdapter(createFactoryContext({ channelId: "incomplete", driver: "live" }), [
+        factory,
+      ]),
+    ).rejects.toThrow(
+      'QA transport factory "incomplete" advertises adapter-prepared-flow-context but its adapter does not implement prepareFlow',
+    );
+  });
+
   it("rejects inherited prototype keys as unsupported transport ids", () => {
     expect(() => normalizeQaTransportId("toString")).toThrow("unsupported QA transport: toString");
     expect(() => normalizeQaTransportId("__proto__")).toThrow(

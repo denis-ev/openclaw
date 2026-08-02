@@ -4,6 +4,7 @@ import {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
   loadLiveTransportQaSuiteRuntime,
+  QA_ADAPTER_PREPARED_FLOW_CONTEXT_CAPABILITIES,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
@@ -27,6 +28,7 @@ export const discordQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
     commandName: "discord",
     adapterFactory: createLiveTransportQaAdapterFactory({
+      capabilities: QA_ADAPTER_PREPARED_FLOW_CONTEXT_CAPABILITIES,
       id: "discord",
       async create(context) {
         return (await loadDiscordQaAdapterRuntime()).createDiscordQaTransportAdapter(context);

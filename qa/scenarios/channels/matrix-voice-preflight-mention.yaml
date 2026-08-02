@@ -56,6 +56,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runVoicePreflightMentionScenario
   args:
     - expr: "scenarioContext"

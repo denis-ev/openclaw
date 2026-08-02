@@ -180,8 +180,13 @@ type QaRunnerTransportAdapterDefinition = {
   cleanupAfterGatewayStop?: () => Promise<void>;
 };
 
+/** Optional behavior a QA transport factory guarantees on every created adapter. */
+export type QaRunnerTransportImplementationCapability = "adapter-prepared-flow-context";
+
 type QaRunnerTransportFactory = {
   id: string;
+  /** Planning-visible guarantees. `adapter-prepared-flow-context` requires `prepareFlow`. */
+  capabilities?: readonly QaRunnerTransportImplementationCapability[];
   /** Each create() call owns isolated runtime state and may run concurrently. */
   isolatesInstances?: boolean;
   matches: (context: { channelId: string; driver: string }) => boolean;
@@ -596,6 +601,11 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
       if (
         adapterFactory &&
         (adapterFactory.id !== runner.commandName ||
+          (adapterFactory.capabilities !== undefined &&
+            (!Array.isArray(adapterFactory.capabilities) ||
+              adapterFactory.capabilities.some(
+                (capability) => capability !== "adapter-prepared-flow-context",
+              ))) ||
           (adapterFactory.isolatesInstances !== undefined &&
             typeof adapterFactory.isolatesInstances !== "boolean") ||
           typeof adapterFactory.matches !== "function" ||

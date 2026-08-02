@@ -30,6 +30,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-policy.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runSecondaryRoomOpenTriggerScenario
   args:
     - expr: "scenarioContext"

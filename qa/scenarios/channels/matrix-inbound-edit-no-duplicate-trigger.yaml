@@ -13,6 +13,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-edit.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runInboundEditNoDuplicateTriggerScenario
   args:
     - expr: "scenarioContext"

@@ -17,6 +17,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runToolProgressCommandPreviewScenario
   args:
     - expr: "scenarioContext"

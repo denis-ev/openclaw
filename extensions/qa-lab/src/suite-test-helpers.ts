@@ -1,3 +1,4 @@
+import type { QaRunnerTransportImplementationCapability } from "openclaw/plugin-sdk/qa-runner-runtime";
 // Qa Lab helper module supports suite test helpers behavior.
 import type { QaTransportPolicy } from "./qa-transport.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
@@ -11,6 +12,7 @@ export function makeQaSuiteTestScenario(
     config?: Record<string, unknown>;
     plugins?: string[];
     gatewayConfigPatch?: Record<string, unknown>;
+    requiredImplementationCapabilities?: readonly QaRunnerTransportImplementationCapability[];
     gatewayRuntime?: {
       allowUnhealthyStartup?: boolean;
       forwardHostHome?: boolean;
@@ -39,7 +41,12 @@ export function makeQaSuiteTestScenario(
       ...(params.suiteIsolation ? { suiteIsolation: params.suiteIsolation } : {}),
       ...(params.transportPolicy ? { transportPolicy: params.transportPolicy } : {}),
       ...(params.config ? { config: params.config } : {}),
-      flow: { steps: [{ name: "noop", actions: [{ assert: "true" }] }] },
+      flow: {
+        ...(params.requiredImplementationCapabilities
+          ? { requiredImplementationCapabilities: params.requiredImplementationCapabilities }
+          : {}),
+        steps: [{ name: "noop", actions: [{ assert: "true" }] }],
+      },
     },
   } as QaSuiteTestScenario;
 }

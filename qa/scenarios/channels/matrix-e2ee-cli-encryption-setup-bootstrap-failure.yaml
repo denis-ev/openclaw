@@ -29,6 +29,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario
   args:
     - expr: "scenarioContext"

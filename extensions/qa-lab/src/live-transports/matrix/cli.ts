@@ -5,6 +5,7 @@ import {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
   loadLiveTransportQaSuiteRuntime,
+  QA_ADAPTER_PREPARED_FLOW_CONTEXT_CAPABILITIES,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
@@ -52,6 +53,7 @@ async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
           primaryModel: selection.primaryModel,
           providerMode: selection.providerMode,
           scenarioIds: selection.scenarioIds,
+          implementationCapabilities: QA_ADAPTER_PREPARED_FLOW_CONTEXT_CAPABILITIES,
         }),
     });
   };
@@ -75,6 +77,7 @@ export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
     commandName: "matrix",
     adapterFactory: createLiveTransportQaAdapterFactory({
+      capabilities: QA_ADAPTER_PREPARED_FLOW_CONTEXT_CAPABILITIES,
       id: "matrix",
       // Every worker owns a uniquely named disposable homeserver, Gateway, and state tree.
       isolatesInstances: true,

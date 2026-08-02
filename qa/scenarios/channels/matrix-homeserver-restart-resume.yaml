@@ -28,6 +28,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-restart.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runHomeserverRestartResumeScenario
   args:
     - expr: "scenarioContext"

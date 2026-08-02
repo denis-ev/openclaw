@@ -13,6 +13,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-policy.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runMentionMetadataSpoofBlockScenario
   args:
     - expr: "scenarioContext"

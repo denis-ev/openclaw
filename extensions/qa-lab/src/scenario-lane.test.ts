@@ -87,6 +87,7 @@ describe("QA scenario lane matching", () => {
     const scenario = makeQaSuiteTestScenario("strict-live-lane", {
       channel: "matrix",
       runtimePairLane: "core",
+      requiredImplementationCapabilities: ["adapter-prepared-flow-context"],
       config: {
         requiredProviderMode: "live-frontier",
         requiredChannelDriver: "live",
@@ -109,10 +110,40 @@ describe("QA scenario lane matching", () => {
       "providerMode=live-frontier",
       "channelDriver=live",
       "channel=matrix",
+      "implementationCapability=adapter-prepared-flow-context unsupported by implementation=crabline:telegram",
       "provider=claude-cli",
       "model=claude-sonnet-4-6",
       "authMode=subscription",
     ]);
+  });
+
+  it("keeps named driver, implementation capability, provider, and model constraints independent", () => {
+    const scenario = makeQaSuiteTestScenario("capable-live-matrix", {
+      channel: "matrix",
+      requiredImplementationCapabilities: ["adapter-prepared-flow-context"],
+      config: {
+        requiredChannelDriver: "live",
+        requiredProvider: "openai",
+        requiredModel: "gpt-5.6-luna",
+      },
+    });
+    const lane = {
+      scenario,
+      providerMode: "live-frontier" as const,
+      primaryModel: "openai/gpt-5.6-luna",
+      channelDriver: "live" as const,
+      channel: "matrix",
+    };
+
+    expect(describeQaProviderLaneMismatches(lane)).toEqual([
+      "implementationCapability=adapter-prepared-flow-context unsupported by implementation=live:matrix",
+    ]);
+    expect(
+      describeQaProviderLaneMismatches({
+        ...lane,
+        implementationCapabilities: ["adapter-prepared-flow-context"],
+      }),
+    ).toEqual([]);
   });
 
   it.each(["crabline", "live"] as const)(

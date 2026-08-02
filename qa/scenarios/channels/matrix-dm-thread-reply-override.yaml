@@ -29,6 +29,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-dm.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runDmThreadReplyOverrideScenario
   args:
     - expr: "scenarioContext"

@@ -1,3 +1,4 @@
+import type { QaRunnerTransportImplementationCapability } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -18,6 +19,7 @@ export function resolveCatalogLiveTransportQaScenarioIds(params: {
   primaryModel?: string;
   providerMode: QaProviderModeInput;
   scenarioIds?: readonly string[];
+  implementationCapabilities?: readonly QaRunnerTransportImplementationCapability[];
 }) {
   const channelId = params.channelId.trim().toLowerCase();
   const catalog = readQaScenarioPack().scenarios;
@@ -32,6 +34,7 @@ export function resolveCatalogLiveTransportQaScenarioIds(params: {
     primaryModel: params.primaryModel?.trim() || defaultQaModelForMode(providerMode),
     channelDriver: params.channelDriver ?? "live",
     channel: channelId,
+    resolveImplementationCapabilities: () => params.implementationCapabilities ?? [],
   });
   if (selectedScenarios.length === 0) {
     throw new Error(`${channelId} QA catalog selection resolved no scenarios.`);
@@ -45,6 +48,7 @@ export function resolveLiveTransportQaScenarioIds(params: {
   primaryModel?: string;
   providerMode: QaProviderModeInput;
   scenarioIds?: readonly string[];
+  implementationCapabilities?: readonly QaRunnerTransportImplementationCapability[];
 }) {
   return resolveQaProfileScenarios({
     profile: params.profile?.trim() || "release",
@@ -55,6 +59,7 @@ export function resolveLiveTransportQaScenarioIds(params: {
     executionKind: "flow",
     requireDeclaredChannel: true,
     scenarioIds: params.scenarioIds,
+    resolveImplementationCapabilities: () => params.implementationCapabilities ?? [],
   }).scenarios.map((scenario) => scenario.id);
 }
 
@@ -62,6 +67,7 @@ export function listLiveTransportQaScenarios(params: {
   channelId: string;
   primaryModel?: string;
   providerMode: QaProviderModeInput;
+  implementationCapabilities?: readonly QaRunnerTransportImplementationCapability[];
 }) {
   const defaultIds = new Set(resolveLiveTransportQaScenarioIds(params));
   const providerMode = normalizeQaProviderMode(params.providerMode);
@@ -76,6 +82,7 @@ export function listLiveTransportQaScenarios(params: {
     channelDriver: "live",
     channel: params.channelId,
     executionKind: "flow",
+    resolveImplementationCapabilities: () => params.implementationCapabilities ?? [],
   }).selectedScenarios;
   return scenarios.map((scenario) => {
     return {

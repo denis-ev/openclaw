@@ -28,6 +28,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runAttachmentOnlyIgnoredScenario
   args:
     - expr: "scenarioContext"

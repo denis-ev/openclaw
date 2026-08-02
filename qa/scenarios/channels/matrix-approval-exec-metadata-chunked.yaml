@@ -24,6 +24,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-approval.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runApprovalExecMetadataChunkedScenario
   args:
     - expr: "scenarioContext"

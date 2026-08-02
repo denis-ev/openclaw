@@ -1,3 +1,4 @@
+import type { QaRunnerTransportImplementationCapability } from "openclaw/plugin-sdk/qa-runner-runtime";
 // Qa Lab plugin module owns canonical runtime-pair-lane scenario selection.
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -30,6 +31,9 @@ export function resolveQaRuntimePairLaneScenarioIds(params: {
   scenarios?: QaSeedScenarioWithSource[];
   runtimePairLanes: readonly QaRuntimePairLane[];
   runtimePair: boolean;
+  resolveImplementationCapabilities?: (
+    channel?: string,
+  ) => readonly QaRunnerTransportImplementationCapability[];
 }): {
   scenarioIds: string[];
   excludedLaneScenarios: QaSeedScenarioWithSource[];
@@ -62,6 +66,9 @@ export function resolveQaRuntimePairLaneScenarioIds(params: {
       channelDriver: params.channelDriver,
       channel: params.channel ?? scenario.execution.channel ?? params.defaultChannel,
       claudeCliAuthMode: params.claudeCliAuthMode,
+      implementationCapabilities: params.resolveImplementationCapabilities?.(
+        params.channel ?? scenario.execution.channel ?? params.defaultChannel,
+      ),
     }),
   );
   const excludedLaneScenarios = compatibleScenarios.filter(

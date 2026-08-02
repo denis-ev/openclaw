@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
+  readQaScenarioPack,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 
@@ -83,17 +84,20 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).not.toContain('"call":"runAgentPrompt"');
   });
 
-  it("marks live transport modules as live-driver-only", () => {
-    for (const scenarioId of [
-      "matrix-approval-exec-metadata-single-event",
-      "matrix-mxid-prefixed-command-block",
-      "slack-codex-approval-exec-native",
-      "slack-codex-approval-plugin-native",
-    ]) {
-      expect(readQaScenarioExecutionConfig(scenarioId)?.requiredChannelDriver, scenarioId).toBe(
-        "live",
-      );
-    }
+  it("declares the prepared adapter context requirement on every module flow", () => {
+    const moduleScenarios = readQaScenarioPack().scenarios.filter((scenario) =>
+      scenario.execution.flow?.requiredImplementationCapabilities?.includes(
+        "adapter-prepared-flow-context",
+      ),
+    );
+
+    expect(moduleScenarios).toHaveLength(144);
+    expect(
+      moduleScenarios.every(
+        (scenario) =>
+          readQaScenarioExecutionConfig(scenario.id)?.requiredChannelDriver === undefined,
+      ),
+    ).toBe(true);
   });
 
   it("keeps the Teams final-dedupe proof on the real Gateway transport", () => {

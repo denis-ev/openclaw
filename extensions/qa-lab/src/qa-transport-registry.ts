@@ -1,4 +1,7 @@
-import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import type {
+  QaRunnerCliRegistration,
+  QaRunnerTransportImplementationCapability,
+} from "openclaw/plugin-sdk/qa-runner-runtime";
 // Qa Lab plugin module implements qa transport registry behavior.
 import type { QaBusState } from "./bus-state.js";
 import {
@@ -73,6 +76,13 @@ function requireQaTransportFactory(
   return factory;
 }
 
+export function resolveQaTransportImplementationCapabilities(
+  factories: readonly QaTransportAdapterFactory[] | undefined,
+  context: Pick<QaTransportFactoryContext, "channelId" | "driver">,
+): readonly QaRunnerTransportImplementationCapability[] {
+  return factories?.find((factory) => factory.matches(context))?.capabilities ?? [];
+}
+
 function createQaTransportCleanup(cleanup: () => Promise<void> | undefined): () => Promise<void> {
   let pending: Promise<void> | undefined;
 
@@ -118,6 +128,14 @@ function createQaTransportAdapterFactoryRegistry(
             },
             outputDir: context.outputDir,
           });
+          if (
+            factory.capabilities?.includes("adapter-prepared-flow-context") &&
+            typeof definition.prepareFlow !== "function"
+          ) {
+            throw new Error(
+              `QA transport factory "${factory.id}" advertises adapter-prepared-flow-context but its adapter does not implement prepareFlow`,
+            );
+          }
           adapter = createQaStateBackedTransportAdapter(context.state, definition);
         }
       } catch (error) {

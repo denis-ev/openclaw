@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
+  resolveQaTransportImplementationCapabilities,
 } from "./qa-transport-registry.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import {
@@ -45,6 +46,11 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
     channelDriver,
     channel: params?.channelId ?? params?.channelDriverSelection?.channel,
     claudeCliAuthMode: params?.claudeCliAuthMode,
+    resolveImplementationCapabilities: (channel) =>
+      resolveQaTransportImplementationCapabilities(params?.adapterFactories, {
+        channelId: channel ?? params?.channelId ?? transportId,
+        driver: channelDriver ?? transportId,
+      }),
   });
   if (selectedScenarios.length === 0) {
     throw new Error(

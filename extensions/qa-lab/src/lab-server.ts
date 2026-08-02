@@ -50,7 +50,10 @@ import type {
 } from "./lab-server.types.js";
 import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
 import { createQaChannelGatewayConfig } from "./qa-channel-transport.js";
-import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
+import {
+  resolveQaTransportImplementationCapabilities,
+  type QaTransportAdapterFactory,
+} from "./qa-transport-registry.js";
 import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
@@ -348,6 +351,13 @@ export async function startQaLabServer(
                 adapterFactories.some((factory) =>
                   factory.matches({ channelId: channel, driver: "live" }),
                 ),
+              resolveImplementationCapabilities: (channel?: string) =>
+                channel
+                  ? resolveQaTransportImplementationCapabilities(adapterFactories, {
+                      channelId: channel,
+                      driver: "live",
+                    })
+                  : [],
             }
           : {}),
     });

@@ -1,6 +1,9 @@
 // Qa Lab plugin module implements live transport cli behavior.
 import type { Command } from "commander";
-import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import type {
+  QaRunnerCliRegistration,
+  QaRunnerTransportImplementationCapability,
+} from "openclaw/plugin-sdk/qa-runner-runtime";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, formatQaProviderModeHelp } from "../../providers/index.js";
 
 export type LiveTransportQaCommandOptions = {
@@ -38,6 +41,10 @@ type LiveTransportQaCommanderOptions = {
 };
 
 export type LiveTransportQaCliRegistration = QaRunnerCliRegistration;
+
+export const QA_ADAPTER_PREPARED_FLOW_CONTEXT_CAPABILITIES = [
+  "adapter-prepared-flow-context",
+] as const satisfies readonly QaRunnerTransportImplementationCapability[];
 
 type LiveTransportQaCliRegistrationOptions = {
   commandName: string;
@@ -163,11 +170,13 @@ export function createLiveTransportQaCliRegistration(
 }
 
 export function createLiveTransportQaAdapterFactory(params: {
+  capabilities?: readonly QaRunnerTransportImplementationCapability[];
   create: NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]>["create"];
   id: string;
   isolatesInstances?: boolean;
 }): NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]> {
   return {
+    capabilities: params.capabilities,
     id: params.id,
     isolatesInstances: params.isolatesInstances,
     matches: ({ channelId, driver }) => driver === "live" && channelId === params.id,

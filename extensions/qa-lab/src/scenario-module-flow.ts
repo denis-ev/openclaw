@@ -1,5 +1,11 @@
 // QA Lab scenario module references normalize into the canonical flow shape.
+import type { QaRunnerTransportImplementationCapability } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { z } from "zod";
+
+const qaFlowImplementationCapabilities = [
+  "adapter-prepared-flow-context",
+] as const satisfies readonly QaRunnerTransportImplementationCapability[];
+const qaFlowImplementationCapabilitySchema = z.enum(qaFlowImplementationCapabilities);
 
 const qaFlowModuleExportArgSchema = z
   .object({
@@ -24,6 +30,10 @@ const qaFlowModuleSchema = z.object({
   module: z.string().trim().min(1),
   call: z.string().trim().min(1),
   args: z.array(qaFlowModuleArgSchema).optional(),
+  requiredImplementationCapabilities: z
+    .array(qaFlowImplementationCapabilitySchema)
+    .min(1)
+    .optional(),
 });
 const qaFlowExecutionShape = {
   providerMode: z.enum(["aimock", "live-frontier", "mock-openai"]).optional(),
@@ -33,17 +43,10 @@ const qaFlowExecutionShape = {
 };
 
 type QaScenarioModuleFlow = z.infer<typeof qaFlowModuleSchema>;
-type QaScenarioFlowShape = { steps: unknown[] };
-
-function resolveRequiredChannelDriver(
-  flow: QaScenarioFlowShape | QaScenarioModuleFlow | undefined,
-): "live" | undefined {
-  // Modules under live-transports consume adapter-prepared runtime context.
-  // Crabline implements normalized transport only and cannot supply that context.
-  return flow && "module" in flow && flow.module.startsWith("./live-transports/")
-    ? "live"
-    : undefined;
-}
+type QaScenarioFlowShape = {
+  steps: unknown[];
+  requiredImplementationCapabilities?: QaRunnerTransportImplementationCapability[];
+};
 
 function normalizeQaScenarioFileMetadata<
   T extends { objective?: string; successCriteria?: string[] },
@@ -74,6 +77,9 @@ function resolveQaScenarioFileFlow<TFlow extends QaScenarioFlowShape>(
     return flow;
   }
   return {
+    ...(flow.requiredImplementationCapabilities
+      ? { requiredImplementationCapabilities: flow.requiredImplementationCapabilities }
+      : {}),
     steps: [
       {
         name: title,
@@ -110,6 +116,6 @@ export const qaScenarioModuleFlow = {
   moduleSchema: qaFlowModuleSchema,
   executionShape: qaFlowExecutionShape,
   normalizeMetadata: normalizeQaScenarioFileMetadata,
-  resolveRequiredChannelDriver,
+  implementationCapabilitySchema: qaFlowImplementationCapabilitySchema,
   resolveFlow: resolveQaScenarioFileFlow,
 };

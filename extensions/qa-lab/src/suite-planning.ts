@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements suite planning behavior.
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import type { QaRunnerTransportImplementationCapability } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pMap from "p-map";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
@@ -34,6 +35,9 @@ function selectQaFlowSuiteScenarios(params: {
   channelDriver?: QaScorecardChannelDriver | null;
   channel?: string | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
+  resolveImplementationCapabilities?: (
+    channel?: string,
+  ) => readonly QaRunnerTransportImplementationCapability[];
 }) {
   const requestedScenarioIds =
     params.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
@@ -67,6 +71,9 @@ function selectQaFlowSuiteScenarios(params: {
         channelDriver: params.channelDriver,
         channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
+        implementationCapabilities: params.resolveImplementationCapabilities?.(
+          params.channel ?? scenario.execution.channel,
+        ),
       });
       return mismatches.length > 0 ? [`${scenario.id} (${mismatches.join(", ")})`] : [];
     });
@@ -91,6 +98,9 @@ function selectQaFlowSuiteScenarios(params: {
         channelDriver: params.channelDriver,
         channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
+        implementationCapabilities: params.resolveImplementationCapabilities?.(
+          params.channel ?? scenario.execution.channel,
+        ),
       }),
   );
 }

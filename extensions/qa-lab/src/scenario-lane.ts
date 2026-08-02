@@ -1,3 +1,4 @@
+import type { QaRunnerTransportImplementationCapability } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
 import type { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
@@ -58,6 +59,7 @@ export function describeQaProviderLaneMismatches(params: {
   channelDriver?: QaScorecardChannelDriver | null;
   channel?: string | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
+  implementationCapabilities?: readonly QaRunnerTransportImplementationCapability[];
 }) {
   const mismatches: string[] = [];
   const config = params.scenario.execution.config ?? {};
@@ -82,6 +84,24 @@ export function describeQaProviderLaneMismatches(params: {
     params.scenario.execution.kind === "flow" ? params.scenario.execution.channels : undefined;
   if (allowedChannels && !allowedChannels.includes(effectiveChannel ?? "")) {
     mismatches.push(`channel=${allowedChannels.join("|")}`);
+  }
+  const requiredImplementationCapabilities =
+    params.scenario.execution.kind === "flow"
+      ? params.scenario.execution.flow?.requiredImplementationCapabilities
+      : undefined;
+  if (requiredImplementationCapabilities?.length) {
+    const selectedCapabilities = new Set(params.implementationCapabilities ?? []);
+    const implementation =
+      effectiveChannel && effectiveChannel !== effectiveChannelDriver
+        ? `${effectiveChannelDriver}:${effectiveChannel}`
+        : effectiveChannelDriver;
+    for (const capability of requiredImplementationCapabilities) {
+      if (!selectedCapabilities.has(capability)) {
+        mismatches.push(
+          `implementationCapability=${capability} unsupported by implementation=${implementation}`,
+        );
+      }
+    }
   }
   const selected = splitQaModelRef(params.primaryModel);
   const requiredProvider = normalizeQaConfigString(config.requiredProvider);

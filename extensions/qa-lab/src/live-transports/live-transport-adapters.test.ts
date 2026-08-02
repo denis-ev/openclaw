@@ -54,6 +54,14 @@ const factories = [
 ] as const;
 
 describe("live transport adapter factories", () => {
+  it("advertises prepared flow context only for adapters that implement it", () => {
+    expect(discordQaAdapterFactory.capabilities).toEqual(["adapter-prepared-flow-context"]);
+    expect(matrixQaAdapterFactory.capabilities).toEqual(["adapter-prepared-flow-context"]);
+    expect(slackQaAdapterFactory.capabilities).toEqual(["adapter-prepared-flow-context"]);
+    expect(whatsappQaAdapterFactory.capabilities).toEqual(["adapter-prepared-flow-context"]);
+    expect(telegramQaAdapterFactory.capabilities).toBeUndefined();
+  });
+
   it("opts only the disposable Matrix adapter into same-channel parallelism", () => {
     expect(matrixQaAdapterFactory.isolatesInstances).toBe(true);
     expect(discordQaAdapterFactory.isolatesInstances).toBeUndefined();
@@ -73,7 +81,11 @@ describe("live transport adapter factories", () => {
     async (channelId, create) => {
       const adapterOptions = { sutAccountId: `${channelId}-sut` };
       const state = createQaBusState();
-      const adapter = createQaChannelTransport(state);
+      const baseAdapter = createQaChannelTransport(state);
+      const adapter =
+        channelId === "telegram"
+          ? baseAdapter
+          : Object.assign(baseAdapter, { async prepareFlow() {} });
       create.mockResolvedValueOnce(adapter);
       const created = await createQaTransportAdapter(
         {

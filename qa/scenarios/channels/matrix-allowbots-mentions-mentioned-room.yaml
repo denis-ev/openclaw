@@ -23,6 +23,7 @@ scenario:
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-allowbots.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runAllowBotsMentionsMentionedRoomScenario
   args:
     - expr: "scenarioContext"

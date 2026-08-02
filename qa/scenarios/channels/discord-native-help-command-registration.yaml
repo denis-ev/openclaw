@@ -12,6 +12,7 @@ scenario:
     suiteIsolation: isolated
 flow:
   module: ./live-transports/discord/scenario-runtime.js
+  requiredImplementationCapabilities: [adapter-prepared-flow-context]
   call: runDiscordScenario
   args:
     - { expr: discordScenarioContext }

@@ -1,6 +1,7 @@
 // Qa Lab helper module supports run config behavior.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import type { QaRunnerTransportImplementationCapability } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   QaLabExecutionKind,
@@ -278,6 +279,9 @@ export function resolveQaLabRunPlan(params: {
   scorecardReport: QaScorecardTaxonomyReport;
   defaultChannel?: string;
   supportsChannel?: (channel: string) => boolean;
+  resolveImplementationCapabilities?: (
+    channel?: string,
+  ) => readonly QaRunnerTransportImplementationCapability[];
 }): QaLabResolvedRunPlan {
   const { selection } = params;
   const explicitScenarioSelection = selection.scenarioIds !== null;
@@ -314,6 +318,7 @@ export function resolveQaLabRunPlan(params: {
       scenarios: membership.profileScenarios,
       runtimePairLanes: selection.runtimePairLane ? [selection.runtimePairLane] : [],
       runtimePair: selection.runtimePair !== null,
+      resolveImplementationCapabilities: params.resolveImplementationCapabilities,
     });
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
@@ -368,6 +373,7 @@ export function resolveQaLabRunPlan(params: {
     channel: selection.channel,
     defaultChannel: selection.channelDriver === "crabline" ? params.defaultChannel : undefined,
     supportsChannel: params.supportsChannel,
+    resolveImplementationCapabilities: params.resolveImplementationCapabilities,
   });
   exclusions.push(
     ...profileExecution.excludedScenarios.map(({ scenario, reasons }) => ({
