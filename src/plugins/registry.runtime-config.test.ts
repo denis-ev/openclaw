@@ -7,6 +7,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { createPluginRecord } from "./loader-records.js";
+import { assertBundledPluginRuntime } from "./plugin-runtime-authorization.js";
 import { createPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -26,6 +27,45 @@ function createTestRegistry(runtime: PluginRuntime) {
 }
 
 describe("plugin registry runtime config scope", () => {
+  it("authorizes only exact host-issued runtimes for bundled plugins", () => {
+    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const config = {} as OpenClawConfig;
+    const createApi = (params: {
+      id: string;
+      origin: "bundled" | "global";
+      trustedOfficialInstall?: boolean;
+    }) =>
+      pluginRegistry.createApi(
+        createPluginRecord({
+          ...params,
+          name: params.id,
+          source: `/plugins/${params.id}/index.js`,
+          enabled: true,
+          configSchema: false,
+        }),
+        { config },
+      );
+
+    const bundled = createApi({ id: "bundled-bootstrap", origin: "bundled" });
+    const official = createApi({
+      id: "official-plugin",
+      origin: "global",
+      trustedOfficialInstall: true,
+    });
+    const untrusted = createApi({ id: "workspace-plugin", origin: "global" });
+
+    expect(() => assertBundledPluginRuntime(bundled.runtime)).not.toThrow();
+    expect(() => assertBundledPluginRuntime(official.runtime)).toThrow(
+      /plugin "official-plugin" loaded with origin "global"/,
+    );
+    expect(() => assertBundledPluginRuntime(untrusted.runtime)).toThrow(
+      /plugin "workspace-plugin" loaded with origin "global"/,
+    );
+    expect(() => assertBundledPluginRuntime({} as PluginRuntime)).toThrow(
+      /runtime was not issued by OpenClaw/,
+    );
+  });
+
   it("resolves plugin API paths against the plugin root", () => {
     const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
     const pluginRegistry = createTestRegistry(createPluginRuntime());

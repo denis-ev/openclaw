@@ -14,6 +14,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
+import { resolveDiscordProviderMediaDownloadGuard } from "../provider-endpoint.js";
 import {
   resolveDiscordMessageSnapshots,
   resolveDiscordMessageStickers,
@@ -311,6 +312,22 @@ async function fetchDiscordMedia(params: {
   fallbackContentType?: string;
   originalFilename?: string;
 }) {
+  const providerGuard = resolveDiscordProviderMediaDownloadGuard(params.url);
+  const ssrfPolicy = resolveDiscordMediaSsrFPolicy(
+    providerGuard
+      ? {
+          ...params.ssrfPolicy,
+          allowedOrigins: mergeHostnameList(
+            params.ssrfPolicy?.allowedOrigins,
+            providerGuard.policy.allowedOrigins,
+          ),
+          hostnameAllowlist: mergeHostnameList(
+            params.ssrfPolicy?.hostnameAllowlist,
+            providerGuard.policy.hostnameAllowlist,
+          ),
+        }
+      : params.ssrfPolicy,
+  );
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
   const signal =
     params.abortSignal && timeoutAbortController
@@ -323,7 +340,8 @@ async function fetchDiscordMedia(params: {
     filePathHint: params.filePathHint,
     maxBytes: params.maxBytes,
     fetchImpl: params.fetchImpl,
-    ssrfPolicy: params.ssrfPolicy,
+    ssrfPolicy,
+    ...(providerGuard ? { maxRedirects: providerGuard.maxRedirects } : {}),
     readIdleTimeoutMs: params.readIdleTimeoutMs,
     fallbackContentType: params.fallbackContentType,
     originalFilename: params.originalFilename,
