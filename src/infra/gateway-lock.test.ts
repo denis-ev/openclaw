@@ -70,12 +70,11 @@ function resolveLockPath(env: NodeJS.ProcessEnv) {
   const configPath = resolveConfigPath(env, stateDir);
   const configHash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
   const canonicalStateDir = fsSync.realpathSync.native(path.resolve(stateDir));
-  const stateHash = createHash("sha256").update(canonicalStateDir).digest("hex").slice(0, 8);
   const lockDir = resolveTestLockDir();
   return {
     lockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
-    stateLockPath: path.join(lockDir, `gateway.state.${stateHash}.lock`),
+    stateLockPath: path.join(canonicalStateDir, "locks", "gateway.lock"),
   };
 }
 
@@ -192,10 +191,12 @@ describe("gateway lock", () => {
     await expectGatewayLock(lock2).release();
   });
 
-  it("serializes different config paths that resolve to the same state directory", async () => {
+  it("serializes isolated lock directories that resolve to the same state directory", async () => {
     const stateDir = await fixtureRootTracker.make("shared-state");
     const configA = path.join(stateDir, "gateway-a.json");
     const configB = path.join(stateDir, "gateway-b.json");
+    const lockDirA = await fixtureRootTracker.make("container-a-locks");
+    const lockDirB = await fixtureRootTracker.make("container-b-locks");
     await fs.writeFile(configA, "{}", "utf8");
     await fs.writeFile(configB, "{}", "utf8");
     const envA = {
@@ -210,6 +211,7 @@ describe("gateway lock", () => {
     };
     const lock = expectGatewayLock(
       await acquireForTest(envA, {
+        lockDir: lockDirA,
         platform: "darwin",
       }),
     );
@@ -217,6 +219,7 @@ describe("gateway lock", () => {
     try {
       await expect(
         acquireForTest(envB, {
+          lockDir: lockDirB,
           platform: "darwin",
           readProcessCmdline: () => ["openclaw-gateway"],
           timeoutMs: 15,

@@ -298,12 +298,13 @@ function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, lockDir = resolveGatewa
   const stateDir = canonicalizeStateDir(resolvedStateDir);
   const configPath = resolveConfigPath(env, resolvedStateDir);
   const configHash = sha256HexPrefix(configPath, 8);
-  const stateHash = sha256HexPrefix(stateDir, 8);
   return {
     configLockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
     stateDir,
-    stateLockPath: path.join(lockDir, `gateway.state.${stateHash}.lock`),
+    // State ownership must live on the shared mount so isolated containers contend.
+    // The config lock remains ephemeral for process-local config-path coordination.
+    stateLockPath: path.join(stateDir, "locks", "gateway.lock"),
   };
 }
 
