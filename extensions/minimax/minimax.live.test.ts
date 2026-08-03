@@ -23,6 +23,8 @@ const MINIMAX_TTS_TOKEN_PLAN_KEY =
   process.env.MINIMAX_CODING_API_KEY?.trim() ||
   "";
 const MINIMAX_ANTHROPIC_MESSAGES_URL = "https://api.minimax.io/anthropic/v1/messages";
+const ONE_PIXEL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9J7z8AAAAASUVORK5CYII=";
 const describeLive =
   isLiveTestEnabled() && MINIMAX_SEARCH_KEY.length > 0 ? describe : describe.skip;
 const describeM3Live = isLiveTestEnabled() && MINIMAX_API_KEY.length > 0 ? describe : describe.skip;
@@ -93,6 +95,41 @@ describeM3Live("minimax M3 live", () => {
       .map((block) => block.text?.trim() ?? "")
       .join(" ");
     expect(text).toMatch(/\bok\b/i);
+  }, 120_000);
+
+  it("rejects image input through the Anthropic-compatible route", async () => {
+    const response = await fetch(MINIMAX_ANTHROPIC_MESSAGES_URL, {
+      method: "POST",
+      headers: {
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "x-api-key": MINIMAX_API_KEY,
+      },
+      body: JSON.stringify({
+        model: "MiniMax-M3",
+        max_tokens: 16,
+        thinking: { type: "adaptive" },
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/png",
+                  data: ONE_PIXEL_PNG_BASE64,
+                },
+              },
+              { type: "text", text: "Reply with exactly: ok" },
+            ],
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(120_000),
+    });
+
+    expect(response.ok).toBe(false);
   }, 120_000);
 });
 
