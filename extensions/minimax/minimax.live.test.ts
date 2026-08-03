@@ -22,8 +22,10 @@ const MINIMAX_TTS_TOKEN_PLAN_KEY =
   process.env.MINIMAX_CODE_PLAN_KEY?.trim() ||
   process.env.MINIMAX_CODING_API_KEY?.trim() ||
   "";
+const MINIMAX_ANTHROPIC_MESSAGES_URL = "https://api.minimax.io/anthropic/v1/messages";
 const describeLive =
   isLiveTestEnabled() && MINIMAX_SEARCH_KEY.length > 0 ? describe : describe.skip;
+const describeM3Live = isLiveTestEnabled() && MINIMAX_API_KEY.length > 0 ? describe : describe.skip;
 const describeTtsLive =
   isLiveTestEnabled() && MINIMAX_API_KEY.length > 0 ? describe : describe.skip;
 const describeTokenPlanTtsLive =
@@ -63,6 +65,34 @@ describeLive("minimax plugin live", () => {
     expect(result?.provider).toBe("minimax");
     expect(result?.count).toBeGreaterThan(0);
     expect(Array.isArray(result?.results)).toBe(true);
+  }, 120_000);
+});
+
+describeM3Live("minimax M3 live", () => {
+  it("returns text through the Anthropic-compatible route", async () => {
+    const response = await fetch(MINIMAX_ANTHROPIC_MESSAGES_URL, {
+      method: "POST",
+      headers: {
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "x-api-key": MINIMAX_API_KEY,
+      },
+      body: JSON.stringify({
+        model: "MiniMax-M3",
+        max_tokens: 16,
+        thinking: { type: "adaptive" },
+        messages: [{ role: "user", content: "Reply with exactly: ok" }],
+      }),
+      signal: AbortSignal.timeout(120_000),
+    });
+
+    expect(response.ok).toBe(true);
+    const body = (await response.json()) as { content?: Array<{ text?: string; type?: string }> };
+    const text = body.content
+      ?.filter((block) => block.type === "text")
+      .map((block) => block.text?.trim() ?? "")
+      .join(" ");
+    expect(text).toMatch(/\bok\b/i);
   }, 120_000);
 });
 
