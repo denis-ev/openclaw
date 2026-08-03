@@ -4,7 +4,6 @@ import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
-  type ModelDefinitionConfig,
   type ModelProviderConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
@@ -35,13 +34,7 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
   const existingModels = existingProvider?.models ?? [];
   const apiModel = buildMinimaxApiModelDefinition(params.modelId);
   const hasApiModel = existingModels.some((model) => model.id === params.modelId);
-  const mergedModels = hasApiModel
-    ? existingModels.map((model) =>
-        model.id === "MiniMax-M3" && model.input.includes("image")
-          ? { ...model, input: ["text"] as ModelDefinitionConfig["input"] }
-          : model,
-      )
-    : [...existingModels, apiModel];
+  const mergedModels = hasApiModel ? existingModels : [...existingModels, apiModel];
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {
     baseUrl: params.baseUrl,
     models: [],
