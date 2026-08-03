@@ -302,7 +302,7 @@ The MiniMax plugin registers image understanding separately from the text catalo
 | `minimax`        | `MiniMax-VL-01`     | `MiniMax-M2.7`      |
 | `minimax-portal` | `MiniMax-VL-01`     | `MiniMax-M2.7`      |
 
-That is why automatic media routing uses the plugin-owned MiniMax vision model instead of the bundled Anthropic-compatible text catalog. On that route, `MiniMax-M3` is text-only; PDF understanding uses `MiniMax-M2.7` for text extraction only, and MiniMax does not register a PDF-to-image conversion path.
+That is why automatic media routing uses the plugin-owned MiniMax vision model instead of the bundled Anthropic-compatible text catalog. On that route, `MiniMax-M3` is text-only; run `openclaw doctor --fix` after upgrading to repair persisted M3 image metadata. PDF understanding uses `MiniMax-M2.7` for text extraction only, and MiniMax does not register a PDF-to-image conversion path.
 
 ### Web search
 
