@@ -72,7 +72,7 @@ describeLive("minimax plugin live", () => {
 });
 
 describeM3VisionLive("minimax M3 image input live", () => {
-  it("accepts an Anthropic-compatible base64 image message", async () => {
+  it("identifies the red-to-blue gradient through an Anthropic-compatible image message", async () => {
     const response = await fetch(MINIMAX_ANTHROPIC_MESSAGES_URL, {
       method: "POST",
       headers: {
@@ -95,7 +95,7 @@ describeM3VisionLive("minimax M3 image input live", () => {
                   data: MINIMAX_M3_IMAGE_B64,
                 },
               },
-              { type: "text", text: "Reply with the dominant image color." },
+              { type: "text", text: "State the left and right edge colors, in that order." },
             ],
           },
         ],
@@ -105,7 +105,11 @@ describeM3VisionLive("minimax M3 image input live", () => {
 
     expect(response.ok).toBe(true);
     const body = (await response.json()) as { content?: Array<{ text?: string; type?: string }> };
-    expect(body.content?.some((block) => block.type === "text" && block.text?.trim())).toBe(true);
+    const text = body.content
+      ?.filter((block) => block.type === "text")
+      .map((block) => block.text?.trim() ?? "")
+      .join(" ");
+    expect(text).toMatch(/\bred\b[\s\S]*\bblue\b/i);
   }, 120_000);
 });
 
