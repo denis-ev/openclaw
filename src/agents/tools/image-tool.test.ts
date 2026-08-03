@@ -1256,7 +1256,7 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("routes image-tool requests from image-capable MiniMax M3 to MiniMax-VL-01", async () => {
+  it("routes MiniMax M3 image requests through MiniMax-VL-01", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
       vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-test");
@@ -1271,7 +1271,7 @@ describe("image tool implicit imageModel config", () => {
               baseUrl: "https://api.minimax.io/anthropic",
               apiKey: "${MINIMAX_API_KEY}",
               api: "anthropic-messages",
-              models: [makeModelDefinition("MiniMax-M3", ["text", "image"])],
+              models: [makeModelDefinition("MiniMax-M3", ["text"])],
             },
           },
         },
