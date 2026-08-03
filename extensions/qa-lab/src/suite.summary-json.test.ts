@@ -37,7 +37,7 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.channelDriver).toBeNull();
     expect(json.run.channel).toBeNull();
     expect(json.run.channelCapabilityMatrixPath).toBeNull();
-    expect(json.run.channelProviderReadinessPath).toBeNull();
+    expect(json.run.channelDriverSmokePath).toBeNull();
     expect(json.run.scenarioIds).toBeNull();
   });
 
@@ -55,7 +55,7 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.channelDriver).toBe("crabline");
     expect(json.run.channel).toBe("telegram");
     expect(json.run.channelCapabilityMatrixPath).toBe("crabline-channel-driver-capabilities.json");
-    expect(json.run.channelProviderReadinessPath).toBe("crabline-provider-readiness.json");
+    expect(json.run.channelDriverSmokePath).toBe("crabline-provider-readiness.json");
   });
 
   it("records declarative non-Crabline channel-driver metadata", () => {
@@ -67,7 +67,7 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.channelDriver).toBe("live");
     expect(json.run.channel).toBeNull();
     expect(json.run.channelCapabilityMatrixPath).toBeNull();
-    expect(json.run.channelProviderReadinessPath).toBeNull();
+    expect(json.run.channelDriverSmokePath).toBeNull();
   });
 
   it("includes scenarioIds in run metadata when provided", () => {

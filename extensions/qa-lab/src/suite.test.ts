@@ -621,11 +621,11 @@ describe("qa suite", () => {
       const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
         run?: {
           channelCapabilityMatrixPath?: string;
-          channelProviderReadinessPath?: string;
+          channelDriverSmokePath?: string;
         };
       };
       const capabilityMatrixPath = summary.run?.channelCapabilityMatrixPath;
-      const providerReadinessArtifactPath = summary.run?.channelProviderReadinessPath;
+      const providerReadinessArtifactPath = summary.run?.channelDriverSmokePath;
       if (
         typeof capabilityMatrixPath !== "string" ||
         typeof providerReadinessArtifactPath !== "string"
@@ -759,7 +759,7 @@ describe("qa suite", () => {
       expect.arrayContaining([
         { kind: "channel-capability-matrix", path: capabilityMatrixPath, source: "qa-suite" },
         {
-          kind: "channel-provider-readiness",
+          kind: "channel-driver-smoke",
           path: providerReadinessArtifactPath,
           source: "qa-suite",
         },
@@ -768,12 +768,12 @@ describe("qa suite", () => {
     const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
       run?: {
         channelCapabilityMatrixPath?: string;
-        channelProviderReadinessPath?: string;
+        channelDriverSmokePath?: string;
       };
     };
     expect(summary.run).toMatchObject({
       channelCapabilityMatrixPath: capabilityMatrixPath,
-      channelProviderReadinessPath: providerReadinessArtifactPath,
+      channelDriverSmokePath: providerReadinessArtifactPath,
     });
     expect(artifacts.report).toContain(`Generation capability filename: ${capabilityMatrixPath}.`);
     expect(artifacts.report).toContain(
