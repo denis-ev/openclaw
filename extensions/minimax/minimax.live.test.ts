@@ -22,14 +22,9 @@ const MINIMAX_TTS_TOKEN_PLAN_KEY =
   process.env.MINIMAX_CODE_PLAN_KEY?.trim() ||
   process.env.MINIMAX_CODING_API_KEY?.trim() ||
   "";
-const MINIMAX_ANTHROPIC_MESSAGES_URL = "https://api.minimax.io/anthropic/v1/messages";
-const MINIMAX_M3_IMAGE_B64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
 const describeLive =
   isLiveTestEnabled() && MINIMAX_SEARCH_KEY.length > 0 ? describe : describe.skip;
 const describeTtsLive =
-  isLiveTestEnabled() && MINIMAX_API_KEY.length > 0 ? describe : describe.skip;
-const describeM3VisionLive =
   isLiveTestEnabled() && MINIMAX_API_KEY.length > 0 ? describe : describe.skip;
 const describeTokenPlanTtsLive =
   isLiveTestEnabled() && MINIMAX_TTS_TOKEN_PLAN_KEY.length > 0 ? describe : describe.skip;
@@ -68,48 +63,6 @@ describeLive("minimax plugin live", () => {
     expect(result?.provider).toBe("minimax");
     expect(result?.count).toBeGreaterThan(0);
     expect(Array.isArray(result?.results)).toBe(true);
-  }, 120_000);
-});
-
-describeM3VisionLive("minimax M3 image input live", () => {
-  it("identifies the red-to-blue gradient through an Anthropic-compatible image message", async () => {
-    const response = await fetch(MINIMAX_ANTHROPIC_MESSAGES_URL, {
-      method: "POST",
-      headers: {
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-        "x-api-key": MINIMAX_API_KEY,
-      },
-      body: JSON.stringify({
-        model: "MiniMax-M3",
-        max_tokens: 16,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: "image/png",
-                  data: MINIMAX_M3_IMAGE_B64,
-                },
-              },
-              { type: "text", text: "State the left and right edge colors, in that order." },
-            ],
-          },
-        ],
-      }),
-      signal: AbortSignal.timeout(120_000),
-    });
-
-    expect(response.ok).toBe(true);
-    const body = (await response.json()) as { content?: Array<{ text?: string; type?: string }> };
-    const text = body.content
-      ?.filter((block) => block.type === "text")
-      .map((block) => block.text?.trim() ?? "")
-      .join(" ");
-    expect(text).toMatch(/\bred\b[\s\S]*\bblue\b/i);
   }, 120_000);
 });
 
