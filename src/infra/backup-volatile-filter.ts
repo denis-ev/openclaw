@@ -75,6 +75,7 @@ type VolatileFilterPlan = {
  *   - `{stateDir}/cron/runs/**`/`*.{jsonl,log}`
  *   - `{stateDir}/logs/**`/`*.{jsonl,log}`
  *   - `{stateDir}/{delivery-queue,session-delivery-queue}/**`/`*.{json,delivered,tmp}`
+ *   - `{stateDir}/locks/**`
  *   - `{stateDir}/**`/`*.{sock,pid,tmp}`
  */
 export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterPlan): boolean {
@@ -120,6 +121,11 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         ) {
           return true;
         }
+      }
+
+      // Lock owners are live processes; restoring their coordinator files is unsafe.
+      if (isUnder(filePosix, path.posix.join(stateDirPosix, "locks"))) {
+        return true;
       }
 
       if (

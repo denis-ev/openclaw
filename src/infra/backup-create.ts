@@ -117,7 +117,7 @@ export type BackupCreateResult = {
   }>;
   /**
    * Count of files the archiver actively skipped because they matched the
-   * known-volatile filter (live sessions, cron logs, queues, sockets, pid/tmp).
+   * known-volatile filter (live sessions, cron logs, queues, locks, sockets, pid/tmp).
    * Populated on real writes only; dry runs report 0.
    */
   skippedVolatileCount: number;
@@ -295,7 +295,7 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
       lines.push(
         `Skipped ${result.skippedVolatileCount} volatile file${
           result.skippedVolatileCount === 1 ? "" : "s"
-        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
+        } (live sessions, cron logs, queues, locks, sockets, pid/tmp).`,
       );
     }
     if (result.verified) {
