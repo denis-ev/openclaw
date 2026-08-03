@@ -43,6 +43,26 @@ describe("minimax onboard", () => {
     ]);
   });
 
+  it("repairs stale M3 image metadata when MiniMax is configured again", () => {
+    const cfg = applyMinimaxApiConfig({
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            models: [
+              {
+                ...buildMinimaxApiModelDefinition("MiniMax-M3"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(cfg.models?.providers?.minimax?.models[0]?.input).toEqual(["text"]);
+  });
+
   it("preserves existing model params when adding alias", () => {
     const cfg = applyMinimaxApiConfig(
       {
