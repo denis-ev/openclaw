@@ -19,12 +19,13 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private var activeInputResolution: AudioInputDeviceResolution?
     private var targetSampleRate: Double?
     private var onAudio: (@Sendable (RealtimeTalkAudioFrame) -> Void)?
-    private var voiceProcessingEnabled = false
     private var tapInstalled = false
     private var failureReported = false
 
     var suppressesInputDuringOutput: Bool {
-        !self.voiceProcessingEnabled
+        // Playback uses a separate PCM player, so this capture graph has no far-end
+        // reference for echo cancellation even when voice processing is enabled.
+        true
     }
 
     init(
@@ -147,7 +148,6 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         engine.prepare()
         try engine.start()
         self.activeInputResolution = activeResolution
-        self.voiceProcessingEnabled = enableVoiceProcessing
     }
 
     private func bindSelectedInputIfNeeded(
@@ -236,7 +236,6 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.audioEngine = nil
         self.inputNode = nil
         self.activeInputResolution = nil
-        self.voiceProcessingEnabled = false
     }
 }
 

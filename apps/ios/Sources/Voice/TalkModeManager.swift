@@ -4180,9 +4180,9 @@ extension TalkModeManager {
     }
 
     private func handleRealtimeRelayTermination(_ termination: RealtimeTalkRelayTermination) {
-        guard self.captureMode != .pushToTalk else { return }
         GatewayDiagnostics.log("talk realtime relay terminated reason=\(String(describing: termination))")
         self.realtimeRelaySession = nil
+        guard self.captureMode != .pushToTalk else { return }
         self.handleRealtimeSessionFinish()
     }
 
@@ -5115,6 +5115,15 @@ extension TalkModeManager {
         self.gatewayConnected = true
         self.captureMode = .idle
         self.realtimeSessionReadyAt = nil
+    }
+
+    func _test_preparePushToTalkRealtimeSessionForClose(_ session: RealtimeTalkRelaySession) {
+        self.captureMode = .pushToTalk
+        self.realtimeRelaySession = session
+    }
+
+    func _test_hasRealtimeRelaySession() -> Bool {
+        self.realtimeRelaySession != nil
     }
 
     func _test_rapidRealtimeRestartCount() -> Int {

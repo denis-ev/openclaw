@@ -6,6 +6,32 @@ import Testing
 @testable import OpenClaw
 
 @MainActor
+private final class RelayLifecycleTestAudioCapture: RealtimeTalkAudioCapturing {
+    let suppressesInputDuringOutput = true
+
+    func start(
+        targetSampleRate: Double,
+        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) throws
+    {}
+
+    func stop() {}
+}
+
+@MainActor
+private final class RelayLifecycleTestPCMPlayer: PCMStreamingAudioPlaying {
+    func play(
+        stream: AsyncThrowingStream<Data, Error>,
+        sampleRate: Double) async -> StreamingPlaybackResult
+    {
+        fatalError("Playback is not used by this test")
+    }
+
+    func stop() -> Double? {
+        nil
+    }
+}
+
+@MainActor
 struct TalkModeManagerTests {
     private struct CloseError: Error {}
 
@@ -530,6 +556,25 @@ struct TalkModeManagerTests {
         #expect(manager.statusText == "Reconnecting")
         #expect(manager._test_rapidRealtimeRestartCount() == 1)
         manager.isEnabled = false
+    }
+
+    @Test func `relay close releases push to talk realtime owner`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+                request: { _, _, _ in Data() }),
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            audioCapture: RelayLifecycleTestAudioCapture(),
+            pcmPlayer: RelayLifecycleTestPCMPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        manager._test_preparePushToTalkRealtimeSessionForClose(session)
+        #expect(manager._test_hasRealtimeRelaySession())
+
+        manager._test_handleRealtimeRelayTermination()
+
+        #expect(!manager._test_hasRealtimeRelaySession())
     }
 
     @Test func `recurring realtime ready status preserves push to talk capture`() {
