@@ -855,6 +855,74 @@ struct RealtimeTalkRelaySessionTests {
         #expect(!speakingStates.contains(true))
     }
 
+    @Test func `stale transport after event subscription fails startup`() async throws {
+        let requests = RealtimeRelayStartupRequestLog()
+        let transport = RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { method, params, _ in
+                await requests.record(method: method, params: params)
+                throw URLError(.badServerResponse)
+            },
+            isCurrent: { false })
+        let session = RealtimeTalkRelaySession(
+            transport: transport,
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+
+        do {
+            try await session.start()
+            Issue.record("expected stale transport failure")
+        } catch {
+            #expect(error.localizedDescription == "Gateway connection changed while starting realtime.")
+        }
+
+        #expect(await requests.snapshot().isEmpty)
+    }
+
+    @Test func `stale transport after relay creation closes late session and fails startup`() async throws {
+        let requests = RealtimeRelayStartupRequestLog()
+        let result = TalkSessionCreateResult(
+            sessionid: "talk-session",
+            mode: AnyCodable("realtime"),
+            transport: AnyCodable("gateway-relay"),
+            brain: AnyCodable("agent-consult"),
+            relaysessionid: "relay-1")
+        let resultData = try JSONEncoder().encode(result)
+        let transport = RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { method, params, _ in
+                await requests.record(method: method, params: params)
+                if method == "talk.session.create" {
+                    return resultData
+                }
+                return Data("{\"ok\":true}".utf8)
+            },
+            isCurrent: {
+                await requests.snapshot().isEmpty
+            })
+        let session = RealtimeTalkRelaySession(
+            transport: transport,
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+
+        do {
+            try await session.start()
+            Issue.record("expected stale transport failure")
+        } catch {
+            #expect(error.localizedDescription == "Gateway connection changed while starting realtime.")
+        }
+
+        let recorded = await requests.snapshot()
+        #expect(recorded.map(\.method) == ["talk.session.create", "talk.session.close"])
+        #expect(recorded.last?.params?["sessionId"]?.stringValue == "relay-1")
+    }
+
     @Test func `stop during relay creation closes late session once`() async throws {
         let barrier = RealtimeRelayStartupBarrier()
         let requests = RealtimeRelayStartupRequestLog()
