@@ -208,6 +208,8 @@ final class RealtimeTalkRelaySession {
     private var isOutputPlaying = false
     private var outputIdentity: OutputIdentity?
     private var suppressedOutputIdentity: OutputIdentity?
+    private var awaitingOutputClear = false
+    private var cancelledOutputGenerationWatermark: Int?
     private var outputCancellationTask: Task<Void, Never>?
     private var outputStartedAtMs: Double?
     private var outputPlaybackExpectedEndMs: Double = 0
@@ -348,6 +350,7 @@ final class RealtimeTalkRelaySession {
         self.audioSender = nil
         Task { await audioSender?.close() }
         self.retireOutputCancellation()
+        self.cancelledOutputGenerationWatermark = nil
         self.stopOutputPlayback()
         if sendClose, let relaySessionId = self.relaySessionId, let startupTransport = self.startupTransport {
             Task { [startupTransport] in
@@ -372,13 +375,14 @@ final class RealtimeTalkRelaySession {
     }
 
     func cancelOutput(reason: String = "user") {
+        guard let relaySessionId, let startupTransport else { return }
         let outputIdentity = self.outputIdentity ?? OutputIdentity([:])
         self.outputCancellationGeneration &+= 1
         let cancellationGeneration = self.outputCancellationGeneration
         self.outputCancellationTask?.cancel()
         self.suppressedOutputIdentity = outputIdentity
+        self.awaitingOutputClear = true
         self.stopOutputPlayback()
-        guard let relaySessionId, let startupTransport else { return }
         self.outputCancellationTask = Task { [weak self, startupTransport] in
             var payload: [String: Any] = [
                 "sessionId": relaySessionId,
@@ -394,10 +398,8 @@ final class RealtimeTalkRelaySession {
             let json = data.flatMap { String(data: $0, encoding: .utf8) }
             do {
                 _ = try await startupTransport.request("talk.session.cancelOutput", json, 8)
-            } catch is CancellationError {
-                return
             } catch {
-                guard let self, cancellationGeneration == self.outputCancellationGeneration else { return }
+                guard let self, self.isCurrentOutputCancellation(cancellationGeneration) else { return }
                 let issue = TalkRuntimeIssue(
                     code: .realtimeOutputCancelFailed,
                     message: error.localizedDescription,
@@ -407,8 +409,15 @@ final class RealtimeTalkRelaySession {
                     phase: "output-cancel")
                 self.onIssue(issue)
                 self.onStatus(issue.displayMessage)
+                // A failed current cancellation leaves remote output ownership unknown.
+                // Keep the fence until terminal teardown makes late audio impossible.
+                self.close(sendClose: true)
             }
         }
+    }
+
+    private func isCurrentOutputCancellation(_ generation: UInt64) -> Bool {
+        generation == self.outputCancellationGeneration && !self.isClosed
     }
 
     private func createRelaySession() async throws -> TalkSessionCreateResult {
@@ -488,16 +497,7 @@ final class RealtimeTalkRelaySession {
         case "audioDone":
             self.finishOutputPlaybackStream()
         case "clear":
-            let clearIdentity = OutputIdentity(payload)
-            if let suppressed = self.suppressedOutputIdentity,
-               suppressed.relation(to: clearIdentity) != .unknown
-            {
-                self.retireOutputCancellation()
-            }
-            guard clearIdentity.isEmpty() || self.outputIdentity?.relation(to: clearIdentity) == .same else { return }
-            let marks = self.takePendingPlaybackMarks()
-            self.stopOutputPlayback()
-            self.acknowledgePlaybackMarks(marks)
+            self.handleOutputClear(payload)
         case "mark":
             self.handlePlaybackMark(payload)
         case "transcript":
@@ -1015,9 +1015,9 @@ extension RealtimeTalkRelaySession {
               let data = Data(base64Encoded: base64)
         else { return }
         let incomingIdentity = OutputIdentity(payload)
-        if let suppressedOutputIdentity = self.suppressedOutputIdentity {
-            guard suppressedOutputIdentity.relation(to: incomingIdentity) == .different else { return }
-            self.retireOutputCancellation()
+        guard !self.awaitingOutputClear else { return }
+        if let watermark = self.cancelledOutputGenerationWatermark {
+            guard let generation = incomingIdentity.outputGeneration, generation > watermark else { return }
         }
         if !incomingIdentity.isEmpty() {
             self.outputIdentity = incomingIdentity
@@ -1032,6 +1032,25 @@ extension RealtimeTalkRelaySession {
         self.ensureOutputPlaybackStarted()
         self.outputEnvelope?.append(data)
         self.outputContinuation?.yield(data)
+    }
+
+    private func handleOutputClear(_ payload: [String: AnyCodable]) {
+        let clearIdentity = OutputIdentity(payload)
+        if self.awaitingOutputClear,
+           let suppressed = self.suppressedOutputIdentity,
+           clearIdentity.isEmpty() || suppressed.isEmpty() || suppressed.relation(to: clearIdentity) == .same
+        {
+            if let generation = clearIdentity.outputGeneration ?? suppressed.outputGeneration {
+                self.cancelledOutputGenerationWatermark = max(
+                    self.cancelledOutputGenerationWatermark ?? 0,
+                    generation)
+            }
+            self.retireOutputCancellation()
+        }
+        guard clearIdentity.isEmpty() || self.outputIdentity?.relation(to: clearIdentity) == .same else { return }
+        let marks = self.takePendingPlaybackMarks()
+        self.stopOutputPlayback()
+        self.acknowledgePlaybackMarks(marks)
     }
 
     private func stopOutputPlayback() {
@@ -1058,6 +1077,7 @@ extension RealtimeTalkRelaySession {
         self.outputCancellationTask?.cancel()
         self.outputCancellationTask = nil
         self.suppressedOutputIdentity = nil
+        self.awaitingOutputClear = false
     }
 
     fileprivate nonisolated static func encodePCM16(
