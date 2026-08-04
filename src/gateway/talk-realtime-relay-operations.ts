@@ -549,22 +549,21 @@ export function cancelTalkRealtimeRelayOutput(params: {
   const session = getRelaySession(params.relaySessionId, params.connId);
   const requestedTurnId = params.turnId?.trim();
   const activeTurnId = session.harness.talk.activeTurnId;
-  if (!activeTurnId || (requestedTurnId && requestedTurnId !== activeTurnId)) {
+  if (requestedTurnId && activeTurnId && requestedTurnId !== activeTurnId) {
     return;
   }
   const reason = params.reason ?? "output-cancelled";
   session.harness.handleBargeIn({ audioPlaybackActive: true }, noFallbackRelayOutputFlush);
-  const outputDone = session.harness.talk.finishOutputAudio({
-    turnId: activeTurnId,
-    payload: { reason },
-  });
-  if (!outputDone) {
-    return;
-  }
+  const outputDone = activeTurnId
+    ? session.harness.talk.finishOutputAudio({
+        turnId: activeTurnId,
+        payload: { reason },
+      })
+    : undefined;
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "clear",
-    talkEvent: outputDone,
+    ...(outputDone ? { talkEvent: outputDone } : {}),
   });
 }
 
