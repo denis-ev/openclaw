@@ -429,6 +429,16 @@ struct TalkModeManagerTests {
         #expect(issue.technicalDetails.contains("code: realtime_unavailable"))
     }
 
+    @Test func `relay issue preserves known code and falls back for unknown code`() {
+        let codes = ["realtime_output_cancel_failed", "future_code"].map { rawCode in
+            TalkModeManager.runtimeIssue(from: RealtimeTalkRelayIssue(
+                code: rawCode,
+                message: "failed")).code
+        }
+
+        #expect(codes == [.realtimeOutputCancelFailed, .realtimeUnavailable])
+    }
+
     @Test func `native fallback keeps realtime issue visible`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         let issue = TalkRuntimeIssue(

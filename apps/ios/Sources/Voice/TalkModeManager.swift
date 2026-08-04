@@ -2360,13 +2360,7 @@ final class TalkModeManager: NSObject {
             },
             onIssue: { [weak self] relayIssue in
                 guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
-                let issue = TalkRuntimeIssue(
-                    code: .realtimeUnavailable,
-                    message: relayIssue.message,
-                    provider: relayIssue.provider,
-                    model: relayIssue.model,
-                    transport: relayIssue.transport,
-                    phase: relayIssue.phase)
+                let issue = Self.runtimeIssue(from: relayIssue)
                 self.realtimeRelayStartIssue = issue
                 self.pendingRealtimeIssue = issue
                 self.gatewayTalkLastIssueText = issue.diagnosticSummary
@@ -4215,6 +4209,16 @@ extension TalkModeManager {
             model: self.realtimeModelId,
             transport: self.executionMode == .realtimeRelay ? "gateway-relay" : "webrtc",
             phase: phase)
+    }
+
+    static func runtimeIssue(from issue: RealtimeTalkRelayIssue) -> TalkRuntimeIssue {
+        TalkRuntimeIssue(
+            code: TalkRuntimeIssue.Code(rawValue: issue.code) ?? .realtimeUnavailable,
+            message: issue.message,
+            provider: issue.provider,
+            model: issue.model,
+            transport: issue.transport,
+            phase: issue.phase)
     }
 
     private func realtimeIssue(from error: Error, phase: String) -> TalkRuntimeIssue {
