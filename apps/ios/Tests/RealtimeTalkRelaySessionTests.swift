@@ -73,6 +73,23 @@ private actor RealtimeRelayStartupRequestLog {
 
 @MainActor
 struct RealtimeTalkRelaySessionTests {
+    private func makeIdleCancellationSession(
+        _ onSpeakingChanged: @escaping (Bool) -> Void) -> RealtimeTalkRelaySession
+    {
+        let transport = RealtimeTalkRelaySession.StartupTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { _, _, _ in Data("{\"ok\":true}".utf8) })
+        let session = RealtimeTalkRelaySession(
+            gateway: GatewayNodeSession(),
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            pcmPlayer: DrainingPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: onSpeakingChanged,
+            startupTransport: transport)
+        session._test_setRelaySessionId("relay-1")
+        return session
+    }
+
     @Test func `output playback finish clears barge in start time`() {
         var speakingStates: [Bool] = []
         let session = RealtimeTalkRelaySession(
@@ -239,6 +256,55 @@ struct RealtimeTalkRelaySessionTests {
             seq: nil,
             stateversion: nil))
         #expect(speakingStates == [true, false, true, false])
+    }
+
+    @Test func `idle output cancellation admits tagged audio`() async {
+        var speakingStates: [Bool] = []
+        let session = self.makeIdleCancellationSession { speakingStates.append($0) }
+
+        session.cancelOutput(reason: "barge-in")
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "audio",
+                "audioBase64": Data([0x01]).base64EncodedString(),
+                "outputGeneration": 1,
+            ]),
+            seq: nil,
+            stateversion: nil))
+
+        #expect(speakingStates == [false, true])
+    }
+
+    @Test func `tagged clear retires idle output cancellation`() async {
+        var speakingStates: [Bool] = []
+        let session = self.makeIdleCancellationSession { speakingStates.append($0) }
+
+        session.cancelOutput(reason: "barge-in")
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "clear",
+                "outputGeneration": 1,
+            ]),
+            seq: nil,
+            stateversion: nil))
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "audio",
+                "audioBase64": Data([0x01]).base64EncodedString(),
+            ]),
+            seq: nil,
+            stateversion: nil))
+
+        #expect(speakingStates == [false, true])
     }
 
     @Test func `output cancellation failure emits typed issue without closing`() async {

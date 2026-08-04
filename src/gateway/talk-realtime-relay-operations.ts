@@ -99,6 +99,7 @@ export function pruneInactiveRelayAgentRuns(session: RelaySession): number {
 
 export function closeRelaySession(session: RelaySession, reason: "completed" | "error"): void {
   session.harness.close();
+  session.activeOutputOwner = undefined;
   relaySessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
@@ -582,6 +583,7 @@ export function resetTalkRealtimeRelayContinuity(
   reason = "session.continuity.reset",
 ): TalkEvent | undefined {
   session.toolResultEpoch += 1;
+  session.activeOutputOwner = undefined;
   const retiredCallIds = new Set<string>([
     ...session.activeAgentToolCalls.keys(),
     ...session.toolCalls.cancelledCallIds(),

@@ -543,6 +543,20 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun taggedClearCompletesPendingOutputWithUnknownGeneration() {
+    val manager = createManager(realtimePlaybackDispatcher = StandardTestDispatcher())
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    val completion = CompletableDeferred<Unit>()
+    val capturePauseLock = readPrivateField(manager, "realtimeCapturePauseLock")!!
+    synchronized(capturePauseLock) {
+      setPrivateField(manager, "pendingRealtimeOutputClear", PendingRealtimeOutputClear(1, null, completion))
+    }
+
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear","outputGeneration":7}""")
+    assertTrue(completion.isCompleted)
+  }
+
+  @Test
   fun localizedOffStatusDoesNotBecomeRealtimeStartFailure() =
     runTest {
       val manager = createManager(scope = this)

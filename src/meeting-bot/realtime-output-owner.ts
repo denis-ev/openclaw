@@ -1,4 +1,5 @@
 import type { RealtimeVoiceBridgeEvent } from "../talk/provider-types.js";
+import { matchRealtimeOutputIdentity } from "../talk/realtime-output-identity.js";
 
 const STALE_RESPONSE_LIMIT = 16;
 const AUDIO_DELTA_EVENTS = new Set([
@@ -110,7 +111,10 @@ export function createMeetingRealtimeOutputOwner() {
       if (!responseId || announcedResponseId === responseId) {
         announcedResponseId = undefined;
       }
-      if (responseId && currentResponseId && currentResponseId !== responseId) {
+      if (
+        currentResponseId &&
+        matchRealtimeOutputIdentity({ responseId: currentResponseId }, { responseId }) !== "same"
+      ) {
         return false;
       }
       currentResponseId = undefined;

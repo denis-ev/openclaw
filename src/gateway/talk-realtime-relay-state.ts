@@ -83,6 +83,11 @@ export type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "close"; reason: "completed" | "error" };
 
 type TalkRealtimeRelayEvent = TalkRealtimeRelayEventPayload & { talkEvent?: TalkEvent };
+type RelayOutputOwner = {
+  itemId?: string;
+  responseId?: string;
+  outputGeneration: number;
+};
 
 export type ForcedTerminalProviderResult = {
   result: unknown;
@@ -123,6 +128,7 @@ export type RelaySession = {
   // Turn cancellation invalidates async acceptance callbacks from the prior turn.
   toolResultEpoch: number;
   outputGeneration: number;
+  activeOutputOwner?: RelayOutputOwner;
   clearedOutputGeneration?: number;
   voiceConfig?: OpenClawConfig;
   voiceSessionCreated: boolean;
@@ -219,6 +225,8 @@ export function clearTalkRealtimeRelayOutputGeneration(params: {
   if (generation !== session.outputGeneration || session.clearedOutputGeneration === generation) {
     return undefined;
   }
+  const outputGeneration = session.activeOutputOwner?.outputGeneration ?? generation;
+  session.activeOutputOwner = undefined;
   session.clearedOutputGeneration = generation;
   let outputDone: TalkEvent | undefined;
   session.harness.flushOutput(() => {
@@ -227,7 +235,7 @@ export function clearTalkRealtimeRelayOutputGeneration(params: {
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "clear",
-    outputGeneration: generation,
+    outputGeneration,
     ...(params.providerReason ? { reason: params.providerReason } : {}),
     ...(outputDone ? { talkEvent: outputDone } : {}),
   });

@@ -3035,6 +3035,79 @@ describe("talk realtime gateway relay", () => {
     expect(clearCount()).toBe(beforeCancel + 2);
   });
 
+  it.each(["response.done", "response.cancelled"])(
+    "binds %s to the active output identity",
+    (terminalType) => {
+      let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+      const provider = createIdleRelayProvider();
+      provider.createBridge = (request) => {
+        bridgeRequest = request;
+        return {
+          connect: vi.fn(async () => undefined),
+          sendAudio: vi.fn(),
+          setMediaTimestamp: vi.fn(),
+          handleBargeIn: vi.fn(),
+          submitToolResult: vi.fn(),
+          acknowledgeMark: vi.fn(),
+          close: vi.fn(),
+          isConnected: vi.fn(() => true),
+        };
+      };
+      const { broadcastToConnIds } = createAbortableRelayRunFixture(provider);
+      const emitAudio = (responseId: string, itemId: string) => {
+        bridgeRequest?.onEvent?.({
+          direction: "server",
+          type: "response.audio.delta",
+          responseId,
+          itemId,
+        });
+        bridgeRequest?.onAudio(Buffer.from(responseId));
+      };
+      const audioDoneEvents = () =>
+        broadcastToConnIds.mock.calls
+          .map(
+            (call) => call[1] as { type?: string; outputGeneration?: number; responseId?: string },
+          )
+          .filter((event) => event.type === "audioDone");
+
+      emitAudio("response-1", "item-1");
+      bridgeRequest?.onClearAudio("barge-in");
+      bridgeRequest?.onEvent?.({
+        direction: "server",
+        type: terminalType,
+        responseId: "response-1",
+        itemId: "item-1",
+      });
+      expect(audioDoneEvents()).toHaveLength(0);
+
+      emitAudio("response-2", "item-2");
+      bridgeRequest?.onEvent?.({ direction: "server", type: terminalType });
+      bridgeRequest?.onEvent?.({
+        direction: "server",
+        type: terminalType,
+        responseId: "response-1",
+        itemId: "item-1",
+      });
+      expect(audioDoneEvents()).toHaveLength(0);
+
+      const matchedTerminal = {
+        direction: "server" as const,
+        type: terminalType,
+        responseId: "response-2",
+        itemId: "item-2",
+      };
+      bridgeRequest?.onEvent?.(matchedTerminal);
+      bridgeRequest?.onEvent?.(matchedTerminal);
+
+      expect(audioDoneEvents()).toEqual([
+        expect.objectContaining({
+          outputGeneration: 2,
+          responseId: "response-2",
+        }),
+      ]);
+    },
+  );
+
   it("terminally satisfies a late normal result after turn cancellation without a new turn", async () => {
     const submitToolResult = vi.fn<RealtimeVoiceBridge["submitToolResult"]>();
     const provider = createIdleRelayProvider();

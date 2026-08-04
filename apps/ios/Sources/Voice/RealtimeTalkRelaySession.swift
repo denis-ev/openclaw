@@ -121,6 +121,12 @@ final class RealtimeTalkRelaySession {
     }
 
     private struct OutputIdentity {
+        enum Relation {
+            case same
+            case different
+            case unknown
+        }
+
         let turnId: String?, outputGeneration: Int?
 
         init(_ payload: [String: AnyCodable]) {
@@ -133,14 +139,17 @@ final class RealtimeTalkRelaySession {
             self.turnId == nil && self.outputGeneration == nil
         }
 
-        func matches(_ other: OutputIdentity) -> Bool? {
+        func relation(to other: OutputIdentity) -> Relation {
+            if self.isEmpty() || other.isEmpty() {
+                return self.isEmpty() == other.isEmpty() ? .same : .different
+            }
             if let outputGeneration, let otherGeneration = other.outputGeneration {
-                return outputGeneration == otherGeneration
+                return outputGeneration == otherGeneration ? .same : .different
             }
             if let turnId, let otherTurnId = other.turnId {
-                return turnId == otherTurnId
+                return turnId == otherTurnId ? .same : .different
             }
-            return self.isEmpty() && other.isEmpty() ? true : nil
+            return .unknown
         }
     }
 
@@ -480,10 +489,12 @@ final class RealtimeTalkRelaySession {
             self.finishOutputPlaybackStream()
         case "clear":
             let clearIdentity = OutputIdentity(payload)
-            if clearIdentity.isEmpty() || self.suppressedOutputIdentity?.matches(clearIdentity) == true {
+            if let suppressed = self.suppressedOutputIdentity,
+               suppressed.relation(to: clearIdentity) != .unknown
+            {
                 self.retireOutputCancellation()
             }
-            guard clearIdentity.isEmpty() || self.outputIdentity?.matches(clearIdentity) == true else { return }
+            guard clearIdentity.isEmpty() || self.outputIdentity?.relation(to: clearIdentity) == .same else { return }
             let marks = self.takePendingPlaybackMarks()
             self.stopOutputPlayback()
             self.acknowledgePlaybackMarks(marks)
@@ -1005,7 +1016,7 @@ extension RealtimeTalkRelaySession {
         else { return }
         let incomingIdentity = OutputIdentity(payload)
         if let suppressedOutputIdentity = self.suppressedOutputIdentity {
-            guard suppressedOutputIdentity.matches(incomingIdentity) == false else { return }
+            guard suppressedOutputIdentity.relation(to: incomingIdentity) == .different else { return }
             self.retireOutputCancellation()
         }
         if !incomingIdentity.isEmpty() {

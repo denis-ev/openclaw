@@ -363,6 +363,33 @@ describe("meeting realtime engine output ownership", () => {
     }
   });
 
+  it("does not finish known output from an untagged terminal event", async () => {
+    const fixture = await createEngineFixture();
+    try {
+      fixture.sendOutputAudio(Buffer.from([1]), "response-1");
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledOnce();
+      });
+      const outputDoneCount = () =>
+        fixture.handle
+          .getHealth()
+          .recentTalkEvents.filter((event) => event.type === "output.audio.done").length;
+
+      fixture.callbacks.onEvent?.({ direction: "server", type: "response.done" });
+      expect(outputDoneCount()).toBe(0);
+
+      fixture.callbacks.onEvent?.({
+        direction: "server",
+        responseId: "response-1",
+        type: "response.done",
+      });
+      expect(outputDoneCount()).toBe(1);
+      fixture.releaseWrite(0);
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
   it.each(["response.done", "response.cancelled"])(
     "bounds queued bytes and rejects stale output through %s",
     async (terminalType) => {

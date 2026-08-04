@@ -1365,7 +1365,10 @@ class TalkModeManager internal constructor(
         val (matchingPending, expectedGeneration) =
           synchronized(realtimeCapturePauseLock) {
             val pending = pendingRealtimeOutputClear
-            val pendingMatches = pending != null && (clearGeneration == null || pending.outputGeneration == clearGeneration)
+            val pendingGeneration = pending?.outputGeneration
+            val pendingMatches =
+              pending != null &&
+                (clearGeneration == null || pendingGeneration == null || pendingGeneration == clearGeneration)
             val currentMatches = clearGeneration == null || realtimePlaybackIdentity?.outputGeneration == clearGeneration
             pending.takeIf { pendingMatches } to
               (
