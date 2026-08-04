@@ -10,6 +10,7 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.realtime.capture")
     private let selectedInputUID: @MainActor () -> String?
+    private let onFailure: @MainActor (Error) -> Void
     private let deliveryGate = MacRealtimeTalkCaptureDeliveryGate()
 
     private var audioEngine: AVAudioEngine?
@@ -20,15 +21,20 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private var onAudio: (@Sendable (RealtimeTalkAudioFrame) -> Void)?
     private var voiceProcessingEnabled = false
     private var tapInstalled = false
+    private var failureReported = false
 
     var suppressesInputDuringOutput: Bool {
         !self.voiceProcessingEnabled
     }
 
-    init(selectedInputUID: @escaping @MainActor () -> String? = {
-        AppStateStore.shared.voiceWakeMicID
-    }) {
+    init(
+        selectedInputUID: @escaping @MainActor () -> String? = {
+            AppStateStore.shared.voiceWakeMicID
+        },
+        onFailure: @escaping @MainActor (Error) -> Void = { _ in })
+    {
         self.selectedInputUID = selectedInputUID
+        self.onFailure = onFailure
     }
 
     @MainActor deinit {
@@ -44,6 +50,7 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         }
 
         self.stop()
+        self.failureReported = false
         self.targetSampleRate = targetSampleRate
         self.onAudio = onAudio
         do {
@@ -210,7 +217,14 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         } catch {
             self.logger.error(
                 "realtime input restart failed: \(error.localizedDescription, privacy: .public)")
+            self.reportFailureOnce(error)
         }
+    }
+
+    private func reportFailureOnce(_ error: Error) {
+        guard !self.failureReported else { return }
+        self.failureReported = true
+        self.onFailure(error)
     }
 
     private func teardownEngine() {
@@ -225,6 +239,14 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.voiceProcessingEnabled = false
     }
 }
+
+#if DEBUG
+extension MacRealtimeTalkAudioCapture {
+    func _test_reportFailure(_ error: Error) {
+        self.reportFailureOnce(error)
+    }
+}
+#endif
 
 enum MacRealtimeTalkAudioCaptureError: LocalizedError {
     case invalidTargetSampleRate

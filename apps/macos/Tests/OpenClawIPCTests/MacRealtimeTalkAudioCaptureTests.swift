@@ -104,6 +104,19 @@ struct MacRealtimeTalkAudioCaptureTests {
         #expect(capture.suppressesInputDuringOutput)
     }
 
+    @Test @MainActor func `capture reports a restart failure once`() {
+        var failures: [String] = []
+        let capture = MacRealtimeTalkAudioCapture(
+            selectedInputUID: { nil },
+            onFailure: { failures.append($0.localizedDescription) })
+        let error = MacRealtimeTalkAudioCaptureError.inputUnavailable
+
+        capture._test_reportFailure(error)
+        capture._test_reportFailure(error)
+
+        #expect(failures == [error.localizedDescription])
+    }
+
     @Test func `capture can be released away from the main actor`() async {
         let holder = await MainActor.run {
             OffMainActorCaptureHolder(MacRealtimeTalkAudioCapture(selectedInputUID: { nil }))

@@ -367,6 +367,9 @@ public final class RealtimeTalkRelaySession {
             try self.startMicrophonePump(lifecycleGeneration: lifecycleGeneration)
             self.onStatus("Waiting for realtime…")
             await self.drainPendingPreRelayEvents(lifecycleGeneration: lifecycleGeneration)
+            if let startupIssue {
+                throw Self.startupFailureError(startupIssue)
+            }
             guard await self.isCurrentLifecycle(lifecycleGeneration) else { return }
             switch await self.waitForStartupResult(
                 timeoutSeconds: Self.startupReadyTimeoutSeconds,
@@ -376,14 +379,20 @@ public final class RealtimeTalkRelaySession {
                 return
             case let .failed(issue):
                 self.close(sendClose: true)
-                throw NSError(domain: "RealtimeTalkRelay", code: 6, userInfo: [
-                    NSLocalizedDescriptionKey: issue.message,
-                ])
+                throw Self.startupFailureError(issue)
             case .cancelled:
                 return
             }
         } catch {
-            guard await self.isCurrentLifecycle(lifecycleGeneration) else { return }
+            guard await self.isCurrentLifecycle(lifecycleGeneration) else {
+                // A terminal pre-ready event closes the relay to stop all work. Its recorded
+                // startup issue still owns the result; lifecycle invalidation must not turn it
+                // into a successful start.
+                if let startupIssue {
+                    throw Self.startupFailureError(startupIssue)
+                }
+                return
+            }
             let createdRelaySessionId = self.relaySessionId
             self.close(sendClose: false)
             if let createdRelaySessionId {
@@ -393,6 +402,12 @@ public final class RealtimeTalkRelaySession {
             }
             throw error
         }
+    }
+
+    private nonisolated static func startupFailureError(_ issue: RealtimeTalkRelayIssue) -> NSError {
+        NSError(domain: "RealtimeTalkRelay", code: 6, userInfo: [
+            NSLocalizedDescriptionKey: issue.message,
+        ])
     }
 
     public func stop() {

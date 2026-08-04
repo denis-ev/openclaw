@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawKit
 import OpenClawProtocol
 import Testing
 @testable import OpenClawKit
@@ -89,6 +88,18 @@ private actor RealtimeRelayStartupRequestLog {
 
     func snapshot() -> [RealtimeRelayStartupRequest] {
         self.requests
+    }
+}
+
+private actor RealtimeRelayEventSource {
+    private var continuation: AsyncStream<EventFrame>.Continuation?
+
+    func stream() -> AsyncStream<EventFrame> {
+        AsyncStream { self.continuation = $0 }
+    }
+
+    func yield(_ event: EventFrame) {
+        self.continuation?.yield(event)
     }
 }
 
@@ -246,7 +257,8 @@ struct RealtimeTalkRelaySessionTests {
 
         session._test_markOutputPlaybackFinished()
         for _ in 0..<10 {
-            if !(await requests.snapshot()).isEmpty { break }
+            let snapshot = await requests.snapshot()
+            if !snapshot.isEmpty { break }
             await Task.yield()
         }
 
@@ -742,6 +754,60 @@ struct RealtimeTalkRelaySessionTests {
         session.stop()
 
         #expect(await session._test_waitForStartupCancelled(timeoutSeconds: 1))
+    }
+
+    @Test func `pre ready failure remains a failed start after relay closes`() async throws {
+        let events = RealtimeRelayEventSource()
+        let result = TalkSessionCreateResult(
+            sessionid: "talk-session",
+            mode: AnyCodable("realtime"),
+            transport: AnyCodable("gateway-relay"),
+            brain: AnyCodable("agent-consult"),
+            relaysessionid: "relay-1")
+        let resultData = try JSONEncoder().encode(result)
+        let transport = RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in await events.stream() },
+            request: { method, _, _ in
+                guard method == "talk.session.create" else {
+                    return Data("{\"ok\":true}".utf8)
+                }
+                await events.yield(EventFrame(
+                    type: "event",
+                    event: "talk.event",
+                    payload: AnyCodable([
+                        "relaySessionId": "relay-1",
+                        "type": "error",
+                        "message": "Realtime auth failed",
+                    ]),
+                    seq: nil,
+                    stateversion: nil))
+                await events.yield(EventFrame(
+                    type: "event",
+                    event: "talk.event",
+                    payload: AnyCodable([
+                        "relaySessionId": "relay-1",
+                        "type": "close",
+                        "reason": "error",
+                    ]),
+                    seq: nil,
+                    stateversion: nil))
+                await Task.yield()
+                return resultData
+            })
+        let session = RealtimeTalkRelaySession(
+            transport: transport,
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+
+        do {
+            try await session.start()
+            Issue.record("expected pre-ready relay failure")
+        } catch {
+            #expect(error.localizedDescription == "Realtime auth failed")
+        }
     }
 
     @Test func `startup ready wait covers gateway connect budget`() {

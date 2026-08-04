@@ -119,12 +119,38 @@ struct TalkModeRuntimeSpeechTests {
             .remoteClose(reason: "completed"),
             relayGeneration: relayGeneration)
 
-        #expect(!(await runtime._test_realtimeSessionIsActive()))
+        let realtimeSessionIsActive = await runtime._test_realtimeSessionIsActive()
+        #expect(!realtimeSessionIsActive)
         #expect(await runtime._test_rapidRealtimeRestartCount() == 1)
         #expect(await runtime._test_hasPendingRealtimeRestart())
 
         await runtime._test_cancelRealtimeRecovery()
         session.stop()
+    }
+
+    @Test @MainActor func `microphone failure clears relay owner and schedules bounded recovery`() async {
+        let runtime = TalkModeRuntime()
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+                request: { _, _, _ in throw CancellationError() }),
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            audioCapture: RuntimeTestAudioCapture(),
+            pcmPlayer: RuntimeTestPCMPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        let relayGeneration = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+
+        await runtime._test_handleRealtimeAudioCaptureFailure(
+            "input disappeared",
+            relayGeneration: relayGeneration)
+
+        let realtimeSessionIsActive = await runtime._test_realtimeSessionIsActive()
+        #expect(!realtimeSessionIsActive)
+        #expect(await runtime._test_rapidRealtimeRestartCount() == 1)
+        #expect(await runtime._test_hasPendingRealtimeRestart())
+
+        await runtime._test_cancelRealtimeRecovery()
     }
 
     @Test func `talk speak params carry resolved voice and directive overrides`() {

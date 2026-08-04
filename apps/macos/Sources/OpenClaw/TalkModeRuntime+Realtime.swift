@@ -55,10 +55,17 @@ extension TalkModeRuntime {
             model: self.realtimeModelId,
             voice: self.realtimeSpeakerVoice)
         let session = await MainActor.run {
-            RealtimeTalkRelaySession(
+            let audioCapture = MacRealtimeTalkAudioCapture(onFailure: { [weak self] error in
+                Task {
+                    await self?.handleRealtimeAudioCaptureFailure(
+                        error.localizedDescription,
+                        relayGeneration: relayGeneration)
+                }
+            })
+            return RealtimeTalkRelaySession(
                 transport: transport,
                 options: options,
-                audioCapture: MacRealtimeTalkAudioCapture(),
+                audioCapture: audioCapture,
                 pcmPlayer: PCMStreamingAudioPlayer.shared,
                 onStatus: { [weak self] status in
                     Task { await self?.handleRealtimeStatus(status, relayGeneration: relayGeneration) }
@@ -155,6 +162,35 @@ extension TalkModeRuntime {
         else { return }
         self.logger.warning(
             "talk realtime terminated=\(String(describing: termination), privacy: .public)")
+        await self.recoverRealtimeSession(
+            relayGeneration: relayGeneration,
+            reconnectingStatus: "Realtime disconnected — reconnecting…",
+            fallbackStatus: "Realtime disconnected repeatedly — using native speech")
+    }
+
+    private func handleRealtimeAudioCaptureFailure(
+        _ message: String,
+        relayGeneration: UInt64) async
+    {
+        guard self.realtimeRelayGeneration == relayGeneration,
+              let realtimeSession
+        else { return }
+        self.logger.error("talk realtime input failed: \(message, privacy: .public)")
+        await MainActor.run { realtimeSession.stop() }
+        await self.recoverRealtimeSession(
+            relayGeneration: relayGeneration,
+            reconnectingStatus: "Realtime microphone failed — reconnecting…",
+            fallbackStatus: "Realtime microphone failed repeatedly — using native speech")
+    }
+
+    private func recoverRealtimeSession(
+        relayGeneration: UInt64,
+        reconnectingStatus: String,
+        fallbackStatus: String) async
+    {
+        guard self.realtimeRelayGeneration == relayGeneration,
+              self.realtimeSession != nil
+        else { return }
         self.realtimeSession = nil
         let activeDuration = self.realtimeSessionReadyAt.map { Date().timeIntervalSince($0) } ?? 0
         self.realtimeSessionReadyAt = nil
@@ -175,7 +211,7 @@ extension TalkModeRuntime {
         let lifecycleGeneration = self.lifecycleGeneration
         if let delay = Self.realtimeRestartDelayNanoseconds(attempt: attempt) {
             await MainActor.run {
-                TalkModeController.shared.updatePartialTranscript("Realtime disconnected — reconnecting…")
+                TalkModeController.shared.updatePartialTranscript(reconnectingStatus)
             }
             self.scheduleRealtimeRecovery(
                 after: delay,
@@ -184,8 +220,7 @@ extension TalkModeRuntime {
         } else {
             self.bypassRealtimeOnNextStart = true
             await MainActor.run {
-                TalkModeController.shared.updatePartialTranscript(
-                    "Realtime disconnected repeatedly — using native speech")
+                TalkModeController.shared.updatePartialTranscript(fallbackStatus)
             }
             self.scheduleRealtimeRecovery(
                 after: nil,
@@ -348,6 +383,13 @@ extension TalkModeRuntime {
         relayGeneration: UInt64) async
     {
         await self.handleRealtimeTermination(termination, relayGeneration: relayGeneration)
+    }
+
+    func _test_handleRealtimeAudioCaptureFailure(
+        _ message: String,
+        relayGeneration: UInt64) async
+    {
+        await self.handleRealtimeAudioCaptureFailure(message, relayGeneration: relayGeneration)
     }
 
     func _test_realtimeSessionIsActive() -> Bool {
