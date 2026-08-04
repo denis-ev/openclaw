@@ -48,7 +48,7 @@ type RealtimeVoiceSessionHarnessTalkPayloads = {
   outputAudioDone: (reason: string, details?: RealtimeVoiceOutputAudioDoneDetails) => unknown;
 };
 
-export type RealtimeVoiceOutputAudioDoneDetails = {
+type RealtimeVoiceOutputAudioDoneDetails = {
   markName?: string;
 };
 
@@ -81,12 +81,12 @@ type RealtimeVoiceSessionHarnessHealth = ReturnType<typeof getRealtimeVoiceTrans
     }>;
   };
 
-export type RealtimeVoiceInputAudioEvents = {
+type RealtimeVoiceInputAudioEvents = {
   inputAudioDelta: TalkEvent;
   turn: TalkEnsureTurnResult;
 };
 
-export type RealtimeVoiceOutputAudioEvents = {
+type RealtimeVoiceOutputAudioEvents = {
   outputAudioDelta: TalkEvent;
   outputAudioStarted?: TalkEvent;
   turn: TalkEnsureTurnResult;
