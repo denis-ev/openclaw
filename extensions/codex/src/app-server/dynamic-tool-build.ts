@@ -68,7 +68,7 @@ const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
   "edit",
   "apply_patch",
 ] as const;
-export const CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY = "__openclaw_internal_codex_native_surface__";
+const CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY = "__openclaw_internal_codex_native_surface__";
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
 function preserveRingZeroSystemAgentTool<T extends { name: string; catalogMode?: string }>(
   allTools: T[],
