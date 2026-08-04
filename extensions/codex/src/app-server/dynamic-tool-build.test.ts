@@ -12,6 +12,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
+  CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY,
   buildDynamicTools,
   disableCodexPluginThreadConfig,
   resolveCodexAppServerExecutionCwd,
@@ -287,6 +288,28 @@ describe("Codex app-server dynamic tool build", () => {
       messageActionTurnCapability: "turn-capability-1",
     });
   });
+
+  it.each([
+    { nativeToolSurfaceEnabled: true, expected: [CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY] },
+    { nativeToolSurfaceEnabled: false, expected: [] },
+  ])(
+    "captures the Codex native capability for cron when nativeToolSurfaceEnabled=$nativeToolSurfaceEnabled",
+    async ({ nativeToolSurfaceEnabled, expected }) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      let creatorCap: unknown;
+      setOpenClawCodingToolsFactoryForTests((options) => {
+        creatorCap = options?.cronCreatorToolAllowlistRef;
+        return [createRuntimeDynamicTool("message")];
+      });
+
+      await buildDynamicToolsForTest(params, workspaceDir, { nativeToolSurfaceEnabled });
+
+      expect(creatorCap).toEqual(expected);
+    },
+  );
 
   it("preserves the host-provided OpenClaw tool through the Codex allowlist", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1532,6 +1555,9 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
 
     params.toolsAllow = ["*"];
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    params.toolsAllow = [CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY];
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
 
     params.toolsAllow = [];
