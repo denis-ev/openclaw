@@ -1499,7 +1499,9 @@ describe("talk realtime gateway relay", () => {
       events,
       (payload) => payload.type === "audioStarted",
     );
-    expectRecordFields(audioStartedPayload.talkEvent, { type: "output.audio.started" });
+    const audioStartedEvent = expectRecordFields(audioStartedPayload.talkEvent, {
+      type: "output.audio.started",
+    });
     expect(relay.harness.talk.recentEvents).toContain(audioStartedPayload.talkEvent);
     expectDelivery(audioStartedPayload, false);
 
@@ -1509,8 +1511,11 @@ describe("talk realtime gateway relay", () => {
       type: "audio",
       audioBase64: Buffer.from("audio-out").toString("base64"),
     });
-    expectRecordFields(audioPayload.talkEvent, { type: "output.audio.delta" });
-    expect(audioPayload.talkEvent.seq).toBe(audioStartedPayload.talkEvent.seq + 1);
+    const audioEvent = expectRecordFields(audioPayload.talkEvent, { type: "output.audio.delta" });
+    if (typeof audioStartedEvent.seq !== "number" || typeof audioEvent.seq !== "number") {
+      throw new Error("Expected sequenced relay audio events");
+    }
+    expect(audioEvent.seq).toBe(audioStartedEvent.seq + 1);
     expect(relay.harness.talk.recentEvents).toContain(audioPayload.talkEvent);
     expectDelivery(audioPayload, true);
 
