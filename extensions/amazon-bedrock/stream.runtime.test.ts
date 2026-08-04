@@ -502,6 +502,43 @@ describe("Bedrock thinking effort mapping", () => {
     expect(options).toMatchObject({ maxTokens: 24_000, reasoning: "off" });
   });
 
+  it("does not forward a non-Opus model cap when reasoning is off", () => {
+    const model = bedrockModel({ maxTokens: 32_000 });
+    const options = testing.resolveSimpleBedrockOptions(model, { reasoning: "off" });
+
+    expect(options).toMatchObject({ maxTokens: undefined, reasoning: "off" });
+  });
+
+  it.each([
+    {
+      label: "Opus 5",
+      model: { id: "global.anthropic.claude-opus-5", name: "Claude Opus 5", maxTokens: 32_000 },
+      inferenceConfig: { maxTokens: 32_000 },
+    },
+    {
+      label: "a non-Opus model",
+      model: { id: "amazon.nova-pro-v1:0", name: "Nova Pro", maxTokens: 32_000 },
+      inferenceConfig: {},
+    },
+  ])("sends $label's reasoning-off output cap", async ({ model, inferenceConfig }) => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+      ]),
+    } as never);
+
+    await streamBedrockForTest(
+      bedrockModel(model),
+      { messages: [{ role: "user", content: "Hello", timestamp: 0 }] } as never,
+      { reasoning: "off" },
+    ).result();
+
+    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    expect(command.input?.inferenceConfig).toEqual(inferenceConfig);
+  });
+
   it.each([4096, 8192, 16_384])(
     "does not turn fallback maxTokens %s into an Opus 5 reasoning-off cap",
     (maxTokens) => {

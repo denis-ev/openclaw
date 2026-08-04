@@ -467,7 +467,9 @@ function resolveSimpleBedrockOptions(
   if (options.reasoning === "off") {
     return {
       ...base,
-      maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
+      maxTokens: usesClaudeOpus5BedrockContract(model)
+        ? resolveAdaptiveBedrockMaxTokens(model, base.maxTokens)
+        : base.maxTokens,
       reasoning: "off",
     } satisfies BedrockOptions;
   }
