@@ -187,40 +187,6 @@ public final class RealtimeTalkRelaySession {
         let failed: Bool
     }
 
-    private struct OutputIdentity {
-        enum Relation {
-            case same
-            case different
-            case unknown
-        }
-
-        let turnId: String?
-        let outputGeneration: Int?
-
-        init(_ payload: [String: AnyCodable]) {
-            self.turnId = RealtimeTalkRelaySession.nonEmpty(
-                payload["talkEvent"]?.dictionaryValue?["turnId"]?.stringValue)
-            self.outputGeneration = RealtimeTalkRelaySession.outputGeneration(payload["outputGeneration"])
-        }
-
-        func isEmpty() -> Bool {
-            self.turnId == nil && self.outputGeneration == nil
-        }
-
-        func relation(to other: OutputIdentity) -> Relation {
-            if self.isEmpty() || other.isEmpty() {
-                return self.isEmpty() == other.isEmpty() ? .same : .different
-            }
-            if let outputGeneration, let otherGeneration = other.outputGeneration {
-                return outputGeneration == otherGeneration ? .same : .different
-            }
-            if let turnId, let otherTurnId = other.turnId {
-                return turnId == otherTurnId ? .same : .different
-            }
-            return .unknown
-        }
-    }
-
     private struct RelayChatEvent: Decodable {
         let runId: String?
         let state: String?
@@ -479,50 +445,6 @@ public final class RealtimeTalkRelaySession {
         _ = try? await transport.request("talk.session.close", payload, 8000)
     }
 
-    public func cancelOutput(reason: String = "user") {
-        guard let relaySessionId else { return }
-        let outputIdentity = self.outputIdentity ?? OutputIdentity([:])
-        self.outputCancellationGeneration &+= 1
-        let cancellationGeneration = self.outputCancellationGeneration
-        self.outputCancellationTask?.cancel()
-        self.suppressedOutputIdentity = outputIdentity
-        self.awaitingOutputClear = true
-        self.stopOutputPlayback()
-        self.outputCancellationTask = Task { [weak self, transport] in
-            var payload: [String: AnyCodable] = [
-                "sessionId": AnyCodable(relaySessionId),
-                "reason": AnyCodable(reason),
-            ]
-            if let turnId = outputIdentity.turnId {
-                payload["turnId"] = AnyCodable(turnId)
-            }
-            if let outputGeneration = outputIdentity.outputGeneration {
-                payload["outputGeneration"] = AnyCodable(outputGeneration)
-            }
-            do {
-                _ = try await transport.request("talk.session.cancelOutput", payload, 8000)
-            } catch {
-                guard let self, self.isCurrentOutputCancellation(cancellationGeneration) else { return }
-                let issue = RealtimeTalkRelayIssue(
-                    code: "realtime_output_cancel_failed",
-                    message: error.localizedDescription,
-                    provider: self.options.provider,
-                    model: self.options.model,
-                    transport: "gateway-relay",
-                    phase: "output-cancel")
-                self.onIssue(issue)
-                self.onStatus(issue.message)
-                // A failed current cancellation leaves remote output ownership unknown.
-                // Keep the fence until terminal teardown makes late audio impossible.
-                self.close(sendClose: true)
-            }
-        }
-    }
-
-    private func isCurrentOutputCancellation(_ generation: UInt64) -> Bool {
-        generation == self.outputCancellationGeneration && !self.isClosed
-    }
-
     public func setInputPaused(_ paused: Bool) throws {
         guard self.isInputPaused != paused else { return }
         self.isInputPaused = paused
@@ -658,7 +580,7 @@ public final class RealtimeTalkRelaySession {
             self.logger.debug("talk realtime: close")
             if self.hasReceivedReady {
                 self.onStatus("Ready")
-                let reason = self.nonEmpty(payload["reason"]?.stringValue)
+                let reason = Self.nonEmpty(payload["reason"]?.stringValue)
                 self.close(sendClose: false)
                 self.onTermination(.remoteClose(reason: reason))
                 return
@@ -761,15 +683,6 @@ public final class RealtimeTalkRelaySession {
         guard self.outputAudioChunkCount == 1 || self.outputAudioChunkCount % 20 == 0 else { return }
         self.logger.debug(
             "talk realtime audio: chunks=\(self.outputAudioChunkCount) bytes=\(self.outputAudioByteCount)")
-    }
-
-    private nonisolated static func outputGeneration(_ value: AnyCodable?) -> Int? {
-        guard let raw = value?.doubleValue,
-              raw > 0,
-              raw <= Double(Int.max),
-              raw.rounded(.towardZero) == raw
-        else { return nil }
-        return Int(raw)
     }
 
     private func markOutputAudioStarted(byteCount: Int, nowMs: Double) {
@@ -1140,30 +1053,6 @@ public final class RealtimeTalkRelaySession {
         }
     }
 
-    private func handleOutputAudio(_ payload: [String: AnyCodable]) {
-        guard let base64 = payload["audioBase64"]?.stringValue,
-              let data = Data(base64Encoded: base64)
-        else { return }
-        let incomingIdentity = OutputIdentity(payload)
-        guard !self.awaitingOutputClear else { return }
-        if let watermark = self.cancelledOutputGenerationWatermark {
-            guard let generation = incomingIdentity.outputGeneration, generation > watermark else { return }
-        }
-        if !incomingIdentity.isEmpty() {
-            self.outputIdentity = incomingIdentity
-        }
-        self.recordOutputAudioChunk(byteCount: data.count)
-        self.markOutputAudioStarted(byteCount: data.count, nowMs: ProcessInfo.processInfo.systemUptime * 1000)
-        self.onSpeakingChanged(true)
-        if self.outputContinuation == nil, self.outputTask != nil {
-            self.pendingOutputChunks.append(data)
-            return
-        }
-        self.ensureOutputPlaybackStarted()
-        self.outputEnvelope?.append(data)
-        self.outputContinuation?.yield(data)
-    }
-
     private func stopOutputPlayback() {
         self.outputSessionId += 1
         self.outputContinuation?.finish()
@@ -1181,14 +1070,6 @@ public final class RealtimeTalkRelaySession {
         self.outputPlaybackExpectedEndMs = 0
         self.outputEnvelope?.cancel()
         self.onSpeakingChanged(false)
-    }
-
-    private func retireOutputCancellation() {
-        self.outputCancellationGeneration &+= 1
-        self.outputCancellationTask?.cancel()
-        self.outputCancellationTask = nil
-        self.suppressedOutputIdentity = nil
-        self.awaitingOutputClear = false
     }
 
     private nonisolated static func safeLogMessage(_ value: String) -> String {
@@ -1229,6 +1110,127 @@ public final class RealtimeTalkRelaySession {
     private nonisolated static func trimmed(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+extension RealtimeTalkRelaySession {
+    private struct OutputIdentity {
+        enum Relation {
+            case same
+            case different
+            case unknown
+        }
+
+        let turnId: String?
+        let outputGeneration: Int?
+
+        init(_ payload: [String: AnyCodable]) {
+            self.turnId = RealtimeTalkRelaySession.nonEmpty(
+                payload["talkEvent"]?.dictionaryValue?["turnId"]?.stringValue)
+            self.outputGeneration = RealtimeTalkRelaySession.outputGeneration(payload["outputGeneration"])
+        }
+
+        func isEmpty() -> Bool {
+            self.turnId == nil && self.outputGeneration == nil
+        }
+
+        func relation(to other: OutputIdentity) -> Relation {
+            if self.isEmpty() || other.isEmpty() {
+                return self.isEmpty() == other.isEmpty() ? .same : .different
+            }
+            if let outputGeneration, let otherGeneration = other.outputGeneration {
+                return outputGeneration == otherGeneration ? .same : .different
+            }
+            if let turnId, let otherTurnId = other.turnId {
+                return turnId == otherTurnId ? .same : .different
+            }
+            return .unknown
+        }
+    }
+
+    public func cancelOutput(reason: String = "user") {
+        guard let relaySessionId else { return }
+        let outputIdentity = self.outputIdentity ?? OutputIdentity([:])
+        self.outputCancellationGeneration &+= 1
+        let cancellationGeneration = self.outputCancellationGeneration
+        self.outputCancellationTask?.cancel()
+        self.suppressedOutputIdentity = outputIdentity
+        self.awaitingOutputClear = true
+        self.stopOutputPlayback()
+        self.outputCancellationTask = Task { [weak self, transport] in
+            var payload: [String: AnyCodable] = [
+                "sessionId": AnyCodable(relaySessionId),
+                "reason": AnyCodable(reason),
+            ]
+            if let turnId = outputIdentity.turnId {
+                payload["turnId"] = AnyCodable(turnId)
+            }
+            if let outputGeneration = outputIdentity.outputGeneration {
+                payload["outputGeneration"] = AnyCodable(outputGeneration)
+            }
+            do {
+                _ = try await transport.request("talk.session.cancelOutput", payload, 8000)
+            } catch {
+                guard let self, self.isCurrentOutputCancellation(cancellationGeneration) else { return }
+                let issue = RealtimeTalkRelayIssue(
+                    code: "realtime_output_cancel_failed",
+                    message: error.localizedDescription,
+                    provider: self.options.provider,
+                    model: self.options.model,
+                    transport: "gateway-relay",
+                    phase: "output-cancel")
+                self.onIssue(issue)
+                self.onStatus(issue.message)
+                // A failed current cancellation leaves remote output ownership unknown.
+                // Keep the fence until terminal teardown makes late audio impossible.
+                self.close(sendClose: true)
+            }
+        }
+    }
+
+    private func isCurrentOutputCancellation(_ generation: UInt64) -> Bool {
+        generation == self.outputCancellationGeneration && !self.isClosed
+    }
+
+    private func handleOutputAudio(_ payload: [String: AnyCodable]) {
+        guard let base64 = payload["audioBase64"]?.stringValue,
+              let data = Data(base64Encoded: base64)
+        else { return }
+        let incomingIdentity = OutputIdentity(payload)
+        guard !self.awaitingOutputClear else { return }
+        if let watermark = self.cancelledOutputGenerationWatermark {
+            guard let generation = incomingIdentity.outputGeneration, generation > watermark else { return }
+        }
+        if !incomingIdentity.isEmpty() {
+            self.outputIdentity = incomingIdentity
+        }
+        self.recordOutputAudioChunk(byteCount: data.count)
+        self.markOutputAudioStarted(byteCount: data.count, nowMs: ProcessInfo.processInfo.systemUptime * 1000)
+        self.onSpeakingChanged(true)
+        if self.outputContinuation == nil, self.outputTask != nil {
+            self.pendingOutputChunks.append(data)
+            return
+        }
+        self.ensureOutputPlaybackStarted()
+        self.outputEnvelope?.append(data)
+        self.outputContinuation?.yield(data)
+    }
+
+    private func retireOutputCancellation() {
+        self.outputCancellationGeneration &+= 1
+        self.outputCancellationTask?.cancel()
+        self.outputCancellationTask = nil
+        self.suppressedOutputIdentity = nil
+        self.awaitingOutputClear = false
+    }
+
+    private nonisolated static func outputGeneration(_ value: AnyCodable?) -> Int? {
+        guard let raw = value?.doubleValue,
+              raw > 0,
+              raw <= Double(Int.max),
+              raw.rounded(.towardZero) == raw
+        else { return nil }
+        return Int(raw)
     }
 }
 
