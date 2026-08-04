@@ -88,7 +88,7 @@ export type RelaySession = {
   connId: string;
   context: GatewayRequestContext;
   bridge: RealtimeVoiceBridgeSession;
-  harness: RealtimeVoiceSessionHarness;
+  harness: RealtimeVoiceSessionHarness<unknown, true>;
   sessionKey?: string;
   agentId?: string;
   expiresAtMs: number;
@@ -215,14 +215,22 @@ function relayEventDeliveryOptions(
 }
 
 export function ensureRelayTurn(session: RelaySession): string {
-  const turn = session.harness.talk.ensureTurn();
-  if (turn.event) {
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
-      type: "inputAudio",
-      byteLength: 0,
-      talkEvent: turn.event,
-    });
-  }
+  const turn = session.harness.ensureTurn();
+  broadcastRelayTurnStarted(session, turn.event);
   return turn.turnId;
+}
+
+export function broadcastRelayTurnStarted(
+  session: RelaySession,
+  event: TalkEvent | undefined,
+): void {
+  if (!event) {
+    return;
+  }
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "inputAudio",
+    byteLength: 0,
+    talkEvent: event,
+  });
 }
