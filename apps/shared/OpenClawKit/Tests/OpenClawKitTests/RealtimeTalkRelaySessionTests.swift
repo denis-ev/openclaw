@@ -34,13 +34,21 @@ private final class TestRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private(set) var isStarted = false
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private let startError: Error?
+
+    init(startError: Error? = nil) {
+        self.startError = startError
+    }
 
     func start(
         targetSampleRate: Double,
         onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) throws
     {
-        self.isStarted = true
         self.startCount += 1
+        if let startError {
+            throw startError
+        }
+        self.isStarted = true
     }
 
     func stop() {
@@ -199,6 +207,29 @@ struct RealtimeTalkRelaySessionTests {
         #expect(audioCapture.stopCount == 2)
         #expect(audioCapture.startCount == 1)
         #expect(audioCapture.isStarted)
+    }
+
+    @Test func `input resume surfaces capture restart failure`() throws {
+        let audioCapture = TestRealtimeTalkAudioCapture(startError: URLError(.cannotOpenFile))
+        let session = RealtimeTalkRelaySession(
+            transport: unusedRealtimeRelayTransport(),
+            options: .init(sessionKey: "main", provider: nil, model: nil, voice: nil),
+            audioCapture: audioCapture,
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        session._test_setRelaySessionId("relay-1")
+
+        try session.setInputPaused(true)
+        do {
+            try session.setInputPaused(false)
+            Issue.record("expected audio capture restart failure")
+        } catch {
+            #expect((error as? URLError)?.code == .cannotOpenFile)
+        }
+
+        #expect(audioCapture.startCount == 1)
+        #expect(!audioCapture.isStarted)
     }
 
     @Test func `output playback finish clears barge in start time`() {

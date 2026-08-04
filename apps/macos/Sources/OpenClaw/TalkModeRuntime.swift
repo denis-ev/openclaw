@@ -138,17 +138,30 @@ actor TalkModeRuntime {
         }
 
         if let realtimeSession {
-            do {
-                try await MainActor.run {
-                    try realtimeSession.setInputPaused(paused)
+            let relayGeneration = self.realtimeRelayGeneration
+            guard await self.setRealtimeInputPaused(
+                paused,
+                session: realtimeSession,
+                relayGeneration: relayGeneration)
+            else { return }
+            guard self.realtimeRelayGeneration == relayGeneration,
+                  self.realtimeSession === realtimeSession
+            else { return }
+            if paused {
+                self.lastTranscript = ""
+                self.lastHeard = nil
+                self.lastSpeechEnergyAt = nil
+                self.phase = .idle
+                await MainActor.run {
+                    realtimeSession.cancelOutput(reason: "pause")
+                    TalkModeController.shared.updateLevel(0)
+                    TalkModeController.shared.updateSpeakingLevel(nil)
+                    TalkModeController.shared.updatePartialTranscript("")
+                    TalkModeController.shared.updatePhase(.idle)
                 }
-                if !paused {
-                    self.phase = .listening
-                    await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
-                }
-            } catch {
-                self.logger.error(
-                    "talk realtime pause transition failed: \(error.localizedDescription, privacy: .public)")
+            } else {
+                self.phase = .listening
+                await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
             }
             return
         }
@@ -261,15 +274,19 @@ actor TalkModeRuntime {
     func inputDeviceSelectionDidChange() async {
         if let realtimeSession {
             guard self.isEnabled, !self.isPaused else { return }
-            do {
-                try await MainActor.run {
-                    try realtimeSession.setInputPaused(true)
-                    try realtimeSession.setInputPaused(false)
-                }
-            } catch {
-                self.logger.error(
-                    "talk realtime input restart failed: \(error.localizedDescription, privacy: .public)")
-            }
+            let relayGeneration = self.realtimeRelayGeneration
+            guard await self.setRealtimeInputPaused(
+                true,
+                session: realtimeSession,
+                relayGeneration: relayGeneration)
+            else { return }
+            guard self.realtimeRelayGeneration == relayGeneration,
+                  self.realtimeSession === realtimeSession
+            else { return }
+            _ = await self.setRealtimeInputPaused(
+                false,
+                session: realtimeSession,
+                relayGeneration: relayGeneration)
             return
         }
         guard self.isEnabled, !self.isPaused, self.phase == .listening else { return }

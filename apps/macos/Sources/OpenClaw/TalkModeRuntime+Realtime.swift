@@ -183,6 +183,24 @@ extension TalkModeRuntime {
             fallbackStatus: "Realtime microphone failed repeatedly — using native speech")
     }
 
+    func setRealtimeInputPaused(
+        _ paused: Bool,
+        session: RealtimeTalkRelaySession,
+        relayGeneration: UInt64) async -> Bool
+    {
+        do {
+            try await MainActor.run {
+                try session.setInputPaused(paused)
+            }
+            return true
+        } catch {
+            await self.handleRealtimeAudioCaptureFailure(
+                error.localizedDescription,
+                relayGeneration: relayGeneration)
+            return false
+        }
+    }
+
     private func recoverRealtimeSession(
         relayGeneration: UInt64,
         reconnectingStatus: String,
@@ -394,6 +412,10 @@ extension TalkModeRuntime {
 
     func _test_realtimeSessionIsActive() -> Bool {
         self.realtimeSession != nil
+    }
+
+    func _test_phase() -> TalkModePhase {
+        self.phase
     }
 
     func _test_rapidRealtimeRestartCount() -> Int {

@@ -18,6 +18,8 @@ private final class RuntimeTestAudioCapture: RealtimeTalkAudioCapturing {
 
 @MainActor
 private final class RuntimeTestPCMPlayer: PCMStreamingAudioPlaying {
+    private(set) var stopCount = 0
+
     func play(
         stream: AsyncThrowingStream<Data, Error>,
         sampleRate: Double) async -> StreamingPlaybackResult
@@ -26,7 +28,8 @@ private final class RuntimeTestPCMPlayer: PCMStreamingAudioPlaying {
     }
 
     func stop() -> Double? {
-        nil
+        self.stopCount += 1
+        return nil
     }
 }
 
@@ -151,6 +154,33 @@ struct TalkModeRuntimeSpeechTests {
         #expect(await runtime._test_hasPendingRealtimeRestart())
 
         await runtime._test_cancelRealtimeRecovery()
+    }
+
+    @Test @MainActor func `pausing realtime cancels output and resets the visible phase`() async {
+        let runtime = TalkModeRuntime()
+        let player = RuntimeTestPCMPlayer()
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+                request: { _, _, _ in Data("{\"ok\":true}".utf8) }),
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            audioCapture: RuntimeTestAudioCapture(),
+            pcmPlayer: player,
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        _ = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+        TalkModeController.shared.updatePhase(.speaking)
+        TalkModeController.shared.updateLevel(0.8)
+
+        await runtime.setPaused(true)
+
+        #expect(await runtime._test_phase() == .idle)
+        #expect(TalkModeController.shared.phase == .idle)
+        #expect(TalkModeController.shared.level == 0)
+        #expect(player.stopCount == 1)
+
+        await runtime._test_cancelRealtimeRecovery()
+        session.stop()
     }
 
     @Test func `talk speak params carry resolved voice and directive overrides`() {
