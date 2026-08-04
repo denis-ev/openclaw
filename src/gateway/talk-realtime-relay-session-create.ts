@@ -215,6 +215,9 @@ export function createTalkRealtimeRelaySession(
         }
         const recorded = relay.harness.recordOutputAudio(audio);
         broadcastRelayTurnStarted(relay, recorded.turn.event);
+        if (recorded.outputAudioStarted) {
+          broadcastEvent({ relaySessionId, type: "audioStarted" }, recorded.outputAudioStarted);
+        }
         broadcastEvent(
           {
             relaySessionId,

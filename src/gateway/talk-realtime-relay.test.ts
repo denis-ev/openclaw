@@ -1495,6 +1495,14 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(readyEvent, { event: "talk.event", connIds: ["conn-1"] });
     expectDelivery(readyPayload, false);
 
+    const audioStartedPayload = findEventPayload(
+      events,
+      (payload) => payload.type === "audioStarted",
+    );
+    expectRecordFields(audioStartedPayload.talkEvent, { type: "output.audio.started" });
+    expect(relay.harness.talk.recentEvents).toContain(audioStartedPayload.talkEvent);
+    expectDelivery(audioStartedPayload, false);
+
     const audioPayload = findEventPayload(events, (payload) => payload.type === "audio");
     expectRecordFields(audioPayload, {
       relaySessionId: session.relaySessionId,
@@ -1502,6 +1510,7 @@ describe("talk realtime gateway relay", () => {
       audioBase64: Buffer.from("audio-out").toString("base64"),
     });
     expectRecordFields(audioPayload.talkEvent, { type: "output.audio.delta" });
+    expect(audioPayload.talkEvent.seq).toBe(audioStartedPayload.talkEvent.seq + 1);
     expect(relay.harness.talk.recentEvents).toContain(audioPayload.talkEvent);
     expectDelivery(audioPayload, true);
 

@@ -28,6 +28,7 @@ export const noFallbackRelayOutputFlush = () => {};
 export type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
   | { relaySessionId: string; type: "inputAudio"; byteLength: number }
+  | { relaySessionId: string; type: "audioStarted" }
   | {
       relaySessionId: string;
       type: "audio";
