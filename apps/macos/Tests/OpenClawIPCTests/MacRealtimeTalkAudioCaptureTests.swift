@@ -79,15 +79,15 @@ struct MacRealtimeTalkAudioCaptureTests {
         let gate = MacRealtimeTalkCaptureDeliveryGate()
         let token = gate.activate()
         let sink = RealtimeTalkFrameSink()
-        let handler = MacRealtimeTalkTapHandlerFactory.make(
+        let handler = SendableAudioTapHandler(MacRealtimeTalkTapHandlerFactory.make(
             targetSampleRate: 24000,
             deliveryGate: gate,
             deliveryToken: token,
-            onAudio: { sink.append($0) })
+            onAudio: { sink.append($0) }))
         let finished = DispatchSemaphore(value: 0)
 
         DispatchQueue(label: "talk.realtime.tap-test").async {
-            handler(buffer, AVAudioTime(sampleTime: 0, atRate: 48000))
+            handler.value(buffer, AVAudioTime(sampleTime: 0, atRate: 48000))
             finished.signal()
         }
 
@@ -156,6 +156,16 @@ struct MacRealtimeTalkAudioCaptureTests {
         data.withUnsafeBytes { raw in
             raw.bindMemory(to: Int16.self).map { Int16(littleEndian: $0) }
         }
+    }
+}
+
+/// AVFoundation does not annotate tap blocks as Sendable, but this test owns and
+/// invokes the immutable callback once from its dedicated audio queue.
+private struct SendableAudioTapHandler: @unchecked Sendable {
+    let value: AVAudioNodeTapBlock
+
+    init(_ value: @escaping AVAudioNodeTapBlock) {
+        self.value = value
     }
 }
 
