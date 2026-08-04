@@ -2782,7 +2782,7 @@ describe("talk realtime gateway relay", () => {
       connect: vi.fn(async () => undefined),
       sendAudio: vi.fn(),
       setMediaTimestamp: vi.fn(),
-      handleBargeIn: vi.fn(),
+      handleBargeIn: vi.fn(() => bridgeRequest?.onClearAudio("barge-in")),
       submitToolResult: vi.fn(),
       acknowledgeMark: vi.fn(),
       close: vi.fn(),
@@ -2823,12 +2823,54 @@ describe("talk realtime gateway relay", () => {
     );
     expect(relaySessions.get(session.relaySessionId)?.harness.talk.activeTurnId).toBe(activeTurnId);
     expect(
-      broadcastToConnIds.mock.calls.some(
+      broadcastToConnIds.mock.calls.filter(
         (call) =>
           (call[1] as { type?: string; talkEvent?: { type?: string } }).type === "clear" &&
           (call[1] as { talkEvent?: { type?: string } }).talkEvent?.type === "output.audio.done",
       ),
-    ).toBe(true);
+    ).toHaveLength(1);
+  });
+
+  it("ignores an output cancellation for a turn that is no longer active", () => {
+    const handleBargeIn = vi.fn();
+    const provider = createIdleRelayProvider();
+    provider.createBridge = () => ({
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn,
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    });
+    const { broadcastToConnIds, session } = createAbortableRelayRunFixture(provider);
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from("input").toString("base64"),
+    });
+    const relay = relaySessions.get(session.relaySessionId);
+    const staleTurnId = relay?.harness.talk.activeTurnId;
+    expect(staleTurnId).toBeTruthy();
+    relay?.harness.endTurn("completed");
+    const clearCount = broadcastToConnIds.mock.calls.filter(
+      (call) => (call[1] as { type?: string }).type === "clear",
+    ).length;
+
+    cancelTalkRealtimeRelayOutput({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      turnId: staleTurnId,
+      reason: "late-cancel",
+    });
+
+    expect(handleBargeIn).not.toHaveBeenCalled();
+    expect(
+      broadcastToConnIds.mock.calls.filter(
+        (call) => (call[1] as { type?: string }).type === "clear",
+      ),
+    ).toHaveLength(clearCount);
   });
 
   it("clears queued playback after provider output is already marked done", () => {
