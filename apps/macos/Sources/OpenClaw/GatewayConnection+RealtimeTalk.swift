@@ -14,12 +14,21 @@ extension GatewayConnection {
         return RealtimeTalkRelayTransport(
             subscribeServerEvents: { bufferingNewest in
                 let pushes = await self.subscribe(bufferingNewest: bufferingNewest)
+                let invalidations = await self.subscribeServerLeaseInvalidation(lease)
                 return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
                     let task = Task {
-                        for await push in pushes {
-                            guard await self.isCurrentServerLease(lease) else { break }
-                            guard case let .event(event) = push else { continue }
-                            continuation.yield(event)
+                        await withTaskGroup(of: Void.self) { group in
+                            group.addTask {
+                                for await push in pushes {
+                                    guard case let .event(event) = push else { continue }
+                                    continuation.yield(event)
+                                }
+                            }
+                            group.addTask {
+                                for await _ in invalidations {}
+                            }
+                            await group.next()
+                            group.cancelAll()
                         }
                         continuation.finish()
                     }

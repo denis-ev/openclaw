@@ -257,6 +257,11 @@ private func assertConfigLookupCannotRecreateRoute(
         try await connection.refresh()
         let transport = try await connection.acquireRealtimeTalkTransport()
         #expect(await transport.isCurrent())
+        let events = await transport.subscribeServerEvents(10)
+        let nextEvent = Task {
+            var iterator = events.makeAsyncIterator()
+            return await iterator.next()
+        }
 
         _ = try await transport.request(
             "talk.session.close",
@@ -275,11 +280,13 @@ private func assertConfigLookupCannotRecreateRoute(
         let params = try #require(talkRequestFrame["params"] as? [String: Any])
         #expect(params["sessionId"] as? String == "talk-session-1")
 
-        await connection.shutdown()
+        await connection._test_handleDisconnect(socketGeneration: 1)
         #expect(!(await transport.isCurrent()))
+        #expect(await nextEvent.value == nil)
         await #expect(throws: (any Error).self) {
             _ = try await transport.request("talk.session.close", nil, 4321)
         }
+        await connection.shutdown()
     }
 
     @Test func `operator widget capability refresh is shared and retained`() async throws {
