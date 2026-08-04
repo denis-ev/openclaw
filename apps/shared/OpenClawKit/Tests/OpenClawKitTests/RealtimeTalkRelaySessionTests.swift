@@ -109,6 +109,10 @@ private actor RealtimeRelayEventSource {
     func yield(_ event: EventFrame) {
         self.continuation?.yield(event)
     }
+
+    func finish() {
+        self.continuation?.finish()
+    }
 }
 
 private func unusedRealtimeRelayTransport() -> RealtimeTalkRelayTransport {
@@ -773,6 +777,123 @@ struct RealtimeTalkRelaySessionTests {
         #expect(audioCapture.stopCount == 1)
     }
 
+    @Test func `event stream ending before ready fails startup and closes relay once`() async throws {
+        let events = RealtimeRelayEventSource()
+        let requests = RealtimeRelayStartupRequestLog()
+        let audioCapture = TestRealtimeTalkAudioCapture()
+        var issues: [RealtimeTalkRelayIssue] = []
+        let result = TalkSessionCreateResult(
+            sessionid: "talk-session",
+            mode: AnyCodable("realtime"),
+            transport: AnyCodable("gateway-relay"),
+            brain: AnyCodable("agent-consult"),
+            relaysessionid: "relay-1")
+        let resultData = try JSONEncoder().encode(result)
+        let transport = RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in await events.stream() },
+            request: { method, params, _ in
+                await requests.record(method: method, params: params)
+                return method == "talk.session.create"
+                    ? resultData
+                    : Data("{\"ok\":true}".utf8)
+            })
+        let session = RealtimeTalkRelaySession(
+            transport: transport,
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            audioCapture: audioCapture,
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onIssue: { issues.append($0) },
+            onSpeakingChanged: { _ in })
+        let start = Task { @MainActor in
+            do {
+                try await session.start()
+                return nil as String?
+            } catch {
+                return error.localizedDescription
+            }
+        }
+        while !audioCapture.isStarted {
+            await Task.yield()
+        }
+
+        await events.finish()
+        let failure = await start.value
+        while await requests.snapshot().filter({ $0.method == "talk.session.close" }).isEmpty {
+            await Task.yield()
+        }
+
+        #expect(failure == "Realtime event stream ended before it became ready.")
+        #expect(issues == [RealtimeTalkRelayIssue(
+            message: "Realtime event stream ended before it became ready.",
+            provider: "openai",
+            model: "gpt-realtime-2",
+            transport: "gateway-relay",
+            phase: "connect")])
+        #expect(audioCapture.stopCount == 2)
+        #expect(!audioCapture.isStarted)
+        let recorded = await requests.snapshot()
+        #expect(recorded.map(\.method) == ["talk.session.create", "talk.session.close"])
+        #expect(recorded.last?.params?["sessionId"]?.stringValue == "relay-1")
+    }
+
+    @Test func `event stream ending during relay creation closes late relay and fails startup`() async throws {
+        let barrier = RealtimeRelayStartupBarrier()
+        let events = RealtimeRelayEventSource()
+        let requests = RealtimeRelayStartupRequestLog()
+        let audioCapture = TestRealtimeTalkAudioCapture()
+        var issues: [RealtimeTalkRelayIssue] = []
+        let result = TalkSessionCreateResult(
+            sessionid: "talk-session",
+            mode: AnyCodable("realtime"),
+            transport: AnyCodable("gateway-relay"),
+            brain: AnyCodable("agent-consult"),
+            relaysessionid: "relay-1")
+        let resultData = try JSONEncoder().encode(result)
+        let transport = RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in await events.stream() },
+            request: { method, params, _ in
+                await requests.record(method: method, params: params)
+                if method == "talk.session.create" {
+                    await barrier.suspend()
+                    return resultData
+                }
+                return Data("{\"ok\":true}".utf8)
+            })
+        let session = RealtimeTalkRelaySession(
+            transport: transport,
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            audioCapture: audioCapture,
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onIssue: { issues.append($0) },
+            onSpeakingChanged: { _ in })
+        let start = Task { @MainActor in
+            do {
+                try await session.start()
+                return nil as String?
+            } catch {
+                return error.localizedDescription
+            }
+        }
+        await barrier.waitUntilEntered()
+
+        await events.finish()
+        while issues.isEmpty {
+            await Task.yield()
+        }
+        await barrier.release()
+        let failure = await start.value
+
+        #expect(failure == "Realtime event stream ended before it became ready.")
+        #expect(issues.count == 1)
+        #expect(audioCapture.startCount == 0)
+        #expect(audioCapture.stopCount == 1)
+        let recorded = await requests.snapshot()
+        #expect(recorded.map(\.method) == ["talk.session.create", "talk.session.close"])
+        #expect(recorded.last?.params?["sessionId"]?.stringValue == "relay-1")
+    }
+
     @Test func `closed relay does not wait for startup ready`() async {
         let session = RealtimeTalkRelaySession(
             transport: unusedRealtimeRelayTransport(),
@@ -914,6 +1035,7 @@ struct RealtimeTalkRelaySessionTests {
     }
 
     @Test func `stale transport after relay creation closes late session and fails startup`() async throws {
+        let events = RealtimeRelayEventSource()
         let requests = RealtimeRelayStartupRequestLog()
         let result = TalkSessionCreateResult(
             sessionid: "talk-session",
@@ -923,7 +1045,7 @@ struct RealtimeTalkRelaySessionTests {
             relaysessionid: "relay-1")
         let resultData = try JSONEncoder().encode(result)
         let transport = RealtimeTalkRelayTransport(
-            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            subscribeServerEvents: { _ in await events.stream() },
             request: { method, params, _ in
                 await requests.record(method: method, params: params)
                 if method == "talk.session.create" {
@@ -956,6 +1078,7 @@ struct RealtimeTalkRelaySessionTests {
 
     @Test func `stop during relay creation closes late session once`() async throws {
         let barrier = RealtimeRelayStartupBarrier()
+        let events = RealtimeRelayEventSource()
         let requests = RealtimeRelayStartupRequestLog()
         var statuses: [String] = []
         var speakingStates: [Bool] = []
@@ -967,7 +1090,7 @@ struct RealtimeTalkRelaySessionTests {
             relaysessionid: "relay-1")
         let resultData = try JSONEncoder().encode(result)
         let transport = RealtimeTalkRelayTransport(
-            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            subscribeServerEvents: { _ in await events.stream() },
             request: { method, params, _ in
                 await requests.record(method: method, params: params)
                 if method == "talk.session.create" {

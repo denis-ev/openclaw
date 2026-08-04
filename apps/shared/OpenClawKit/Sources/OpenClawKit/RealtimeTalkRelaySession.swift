@@ -319,6 +319,9 @@ public final class RealtimeTalkRelaySession {
                         transport: self.transport,
                         relaySessionId: relaySessionId)
                 }
+                if let startupIssue {
+                    throw Self.startupFailureError(startupIssue)
+                }
                 return
             }
             guard await self.transport.isCurrent() else {
@@ -508,11 +511,27 @@ public final class RealtimeTalkRelaySession {
     }
 
     private func handleEventStreamEnded(lifecycleGeneration: UInt64) async {
-        guard self.isCurrentLifecycleLocally(lifecycleGeneration), self.hasReceivedReady else { return }
+        guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return }
         self.logger.debug("talk realtime: event stream ended")
-        self.onStatus("Ready")
-        self.close(sendClose: false)
-        self.onTermination(.eventStreamEnded)
+        if self.hasReceivedReady {
+            self.onStatus("Ready")
+            self.close(sendClose: false)
+            self.onTermination(.eventStreamEnded)
+            return
+        }
+        guard !self.hasReceivedFailure else { return }
+        let issue = RealtimeTalkRelayIssue(
+            message: "Realtime event stream ended before it became ready.",
+            provider: self.options.provider,
+            model: self.options.model,
+            transport: "gateway-relay",
+            phase: "connect")
+        self.hasReceivedFailure = true
+        self.startupIssue = issue
+        self.onIssue(issue)
+        self.finishStartupWait(.failed(issue))
+        self.onStatus("Realtime failed before connecting")
+        self.close(sendClose: true)
     }
 
     private func handleGatewayEvent(_ event: EventFrame, lifecycleGeneration: UInt64) async {
@@ -555,7 +574,11 @@ public final class RealtimeTalkRelaySession {
             }
             guard clearIdentity.isEmpty() || self.outputIdentity?.relation(to: clearIdentity) == .same else { return }
             let marks = self.takePendingPlaybackMarks()
-            self.stopOutputPlayback()
+            // Cancellation already published the stopped state. A later clear with no
+            // active output only retires the fence; it must not emit a duplicate callback.
+            if self.isOutputPlaying || self.outputIdentity != nil {
+                self.stopOutputPlayback()
+            }
             self.acknowledgePlaybackMarks(marks)
         case "mark":
             self.handlePlaybackMark(payload)
