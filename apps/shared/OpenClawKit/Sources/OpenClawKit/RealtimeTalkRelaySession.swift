@@ -243,6 +243,7 @@ public final class RealtimeTalkRelaySession {
     private var pendingPlaybackMarks: [String] = []
     private var audioSender: RealtimeAudioSender?
     private var isInputPaused = false
+    private var isOutputPaused = false
     private var audioCaptureGeneration: UInt64 = 0
     private var isClosed = false
     private var lifecycleGeneration: UInt64 = 0
@@ -420,16 +421,13 @@ public final class RealtimeTalkRelaySession {
         for task in self.toolCallTasks.values {
             task.cancel()
         }
-        for task in self.audioSendTasks.values {
-            task.cancel()
-        }
-        self.audioSendTasks.removeAll()
         self.pendingPlaybackMarks.removeAll()
         let audioSender = self.audioSender
         self.audioSender = nil
         Task { await audioSender?.close() }
         self.retireOutputCancellation()
         self.cancelledOutputGenerationWatermark = nil
+        self.isOutputPaused = false
         self.stopOutputPlayback()
         if sendClose, let relaySessionId = self.relaySessionId {
             Task { [transport] in
@@ -461,6 +459,14 @@ public final class RealtimeTalkRelaySession {
                 self.isInputPaused = true
                 throw error
             }
+        }
+    }
+
+    public func setOutputPaused(_ paused: Bool) {
+        guard self.isOutputPaused != paused else { return }
+        self.isOutputPaused = paused
+        if paused {
+            self.cancelOutput(reason: "pause")
         }
     }
 
@@ -983,7 +989,7 @@ public final class RealtimeTalkRelaySession {
     }
 
     private func startPendingOutputPlaybackIfNeeded() {
-        guard !self.pendingOutputChunks.isEmpty else {
+        guard !self.isOutputPaused, !self.pendingOutputChunks.isEmpty else {
             self.pendingOutputDone = false
             return
         }
@@ -1216,6 +1222,7 @@ extension RealtimeTalkRelaySession {
     }
 
     private func handleOutputAudio(_ payload: [String: AnyCodable]) {
+        guard !self.isOutputPaused else { return }
         guard let base64 = payload["audioBase64"]?.stringValue,
               let data = Data(base64Encoded: base64)
         else { return }
@@ -1261,7 +1268,6 @@ extension RealtimeTalkRelaySession {
     private func startMicrophonePump(lifecycleGeneration: UInt64) throws {
         self.stopMicrophonePump()
         guard !self.isInputPaused else { return }
-        self.audioCaptureGeneration &+= 1
         let audioCaptureGeneration = self.audioCaptureGeneration
         try self.audioCapture.start(targetSampleRate: self.inputSampleRateHz) { [weak self] frame in
             Task { @MainActor [weak self] in
@@ -1307,9 +1313,15 @@ extension RealtimeTalkRelaySession {
         let task = Task { @MainActor [weak self, audioSender] in
             guard let self else { return }
             defer { self.audioSendTasks.removeValue(forKey: taskID) }
-            guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return }
+            guard self.isCurrentLifecycleLocally(lifecycleGeneration),
+                  self.audioCaptureGeneration == audioCaptureGeneration,
+                  !self.isInputPaused
+            else { return }
             guard let message = await audioSender.send(encoded, timestampMs: timestampMs) else { return }
-            guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return }
+            guard self.isCurrentLifecycleLocally(lifecycleGeneration),
+                  self.audioCaptureGeneration == audioCaptureGeneration,
+                  !self.isInputPaused
+            else { return }
             self.onStatus("Realtime audio failed: \(message)")
         }
         self.audioSendTasks[taskID] = task
@@ -1352,6 +1364,10 @@ extension RealtimeTalkRelaySession {
 
     private func stopMicrophonePump() {
         self.audioCaptureGeneration &+= 1
+        for task in self.audioSendTasks.values {
+            task.cancel()
+        }
+        self.audioSendTasks.removeAll()
         self.audioCapture.stop()
     }
 }

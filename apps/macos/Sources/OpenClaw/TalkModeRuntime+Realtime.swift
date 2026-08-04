@@ -284,10 +284,11 @@ extension TalkModeRuntime {
         }
     }
 
-    private func handleRealtimeSpeakingChanged(_ speaking: Bool, relayGeneration: UInt64) async {
+    func handleRealtimeSpeakingChanged(_ speaking: Bool, relayGeneration: UInt64) async {
         guard self.realtimeRelayGeneration == relayGeneration,
               self.realtimeSession != nil,
-              self.isEnabled
+              self.isEnabled,
+              !self.isPaused
         else { return }
         if speaking {
             self.phase = .speaking
@@ -298,29 +299,32 @@ extension TalkModeRuntime {
         }
     }
 
-    private func handleRealtimeInputLevel(_ level: Double, relayGeneration: UInt64) async {
+    func handleRealtimeInputLevel(_ level: Double, relayGeneration: UInt64) async {
         guard self.realtimeRelayGeneration == relayGeneration,
               self.realtimeSession != nil,
-              self.isEnabled
+              self.isEnabled,
+              !self.isPaused
         else { return }
         await MainActor.run { TalkModeController.shared.updateLevel(level) }
     }
 
-    private func handleRealtimeOutputLevel(_ level: Double?, relayGeneration: UInt64) async {
+    func handleRealtimeOutputLevel(_ level: Double?, relayGeneration: UInt64) async {
         guard self.realtimeRelayGeneration == relayGeneration,
               self.realtimeSession != nil,
-              self.isEnabled
+              self.isEnabled,
+              !self.isPaused
         else { return }
         await MainActor.run { TalkModeController.shared.updateSpeakingLevel(level) }
     }
 
-    private func handleRealtimeTranscript(
+    func handleRealtimeTranscript(
         _ transcript: RealtimeTalkTranscript,
         relayGeneration: UInt64) async
     {
         guard self.realtimeRelayGeneration == relayGeneration,
               self.realtimeSession != nil,
-              self.isEnabled
+              self.isEnabled,
+              !self.isPaused
         else { return }
         let text = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }

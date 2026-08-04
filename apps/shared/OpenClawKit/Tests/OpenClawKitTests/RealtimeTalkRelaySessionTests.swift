@@ -159,6 +159,25 @@ struct RealtimeTalkRelaySessionTests {
         return session
     }
 
+    private func makeAudioSendSession() -> (RealtimeTalkRelaySession, RealtimeRelayStartupRequestLog) {
+        let requests = RealtimeRelayStartupRequestLog()
+        let transport = RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { method, params, _ in
+                await requests.record(method: method, params: params)
+                return Data("{\"ok\":true}".utf8)
+            })
+        let session = RealtimeTalkRelaySession(
+            transport: transport,
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        session._test_prepareAudioSender(relaySessionId: "relay-1")
+        return (session, requests)
+    }
+
     @Test func `transcript callback carries typed partial and final values`() async {
         var transcripts: [RealtimeTalkTranscript] = []
         let session = RealtimeTalkRelaySession(
@@ -502,6 +521,44 @@ struct RealtimeTalkRelaySessionTests {
         await session._test_handleGatewayEvent(outputAudioEvent(generation: 1))
 
         #expect(speakingStates == [true])
+    }
+
+    @Test func `output pause blocks replacement audio until resumed`() async {
+        var speakingStates: [Bool] = []
+        let session = self.makeIdleCancellationSession { speakingStates.append($0) }
+        let audio: (Int) -> EventFrame = { generation in
+            EventFrame(
+                type: "event",
+                event: "talk.event",
+                payload: AnyCodable([
+                    "relaySessionId": "relay-1",
+                    "type": "audio",
+                    "audioBase64": Data([0x01]).base64EncodedString(),
+                    "outputGeneration": generation,
+                ]),
+                seq: nil,
+                stateversion: nil)
+        }
+
+        await session._test_handleGatewayEvent(audio(1))
+        session.setOutputPaused(true)
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "clear",
+                "outputGeneration": 1,
+            ]),
+            seq: nil,
+            stateversion: nil))
+        await session._test_handleGatewayEvent(audio(2))
+        #expect(speakingStates == [true, false])
+
+        session.setOutputPaused(false)
+        await session._test_handleGatewayEvent(audio(2))
+
+        #expect(speakingStates == [true, false, true])
     }
 
     @Test func `current output cancellation failure terminates and rejects late audio`() async {
@@ -1169,27 +1226,21 @@ struct RealtimeTalkRelaySessionTests {
         #expect(statuses == ["Thinking…"])
     }
 
-    @Test func `stop cancels buffered microphone audio before dispatch`() async throws {
-        let requests = RealtimeRelayStartupRequestLog()
-        let transport = RealtimeTalkRelayTransport(
-            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
-            request: { method, params, _ in
-                await requests.record(method: method, params: params)
-                return Data("{\"ok\":true}".utf8)
-            })
-        let session = RealtimeTalkRelaySession(
-            transport: transport,
-            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
-            audioCapture: TestRealtimeTalkAudioCapture(),
-            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
-            onStatus: { _ in },
-            onSpeakingChanged: { _ in })
-        session._test_prepareAudioSender(relaySessionId: "relay-1")
-        let send = try #require(session._test_enqueueMicrophoneFrame(Data([0x01, 0x02])))
+    @Test func `stop and pause discard buffered microphone audio before dispatch`() async throws {
+        let (stoppedSession, stoppedRequests) = self.makeAudioSendSession()
+        let stoppedSend = try #require(stoppedSession._test_enqueueMicrophoneFrame(Data([0x01])))
 
-        session.stop()
-        await send.value
+        stoppedSession.stop()
+        await stoppedSend.value
+        #expect(await stoppedRequests.snapshot().isEmpty)
 
-        #expect(await requests.snapshot().isEmpty)
+        let (session, requests) = self.makeAudioSendSession()
+        _ = try #require(session._test_enqueueMicrophoneFrame(Data([0x01])))
+        try session.setInputPaused(true)
+        try session.setInputPaused(false)
+        await (try #require(session._test_enqueueMicrophoneFrame(Data([0x02])))).value
+
+        #expect(await requests.snapshot().compactMap { $0.params?["audioBase64"]?.stringValue } == [Data([0x02])
+            .base64EncodedString()])
     }
 }

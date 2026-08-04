@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import Speech
 import Testing
 @testable import OpenClaw
@@ -7,11 +8,14 @@ import Testing
 @MainActor
 private final class RuntimeTestAudioCapture: RealtimeTalkAudioCapturing {
     let suppressesInputDuringOutput = false
+    private(set) var startCount = 0
 
     func start(
         targetSampleRate: Double,
         onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) throws
-    {}
+    {
+        self.startCount += 1
+    }
 
     func stop() {}
 }
@@ -87,6 +91,12 @@ private enum RuntimeRecognitionStartError: Error {
     case failed
 }
 
+enum RuntimeRelayStartupPauseOutcome: Equatable {
+    case resume
+    case remainPaused
+    case disable
+}
+
 @MainActor
 private func makeRuntimeTestRealtimeSession(
     player: RuntimeTestPCMPlayer) -> RealtimeTalkRelaySession
@@ -102,6 +112,7 @@ private func makeRuntimeTestRealtimeSession(
         onSpeakingChanged: { _ in })
 }
 
+@Suite(.serialized)
 struct TalkModeRuntimeSpeechTests {
     @Test func `macOS realtime relay requires local opt in and exact Gateway tuple`() {
         #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
@@ -249,7 +260,7 @@ struct TalkModeRuntimeSpeechTests {
         await runtime._test_cancelRealtimeRecovery()
     }
 
-    @Test @MainActor func `pausing realtime cancels output and resets the visible phase`() async {
+    @Test @MainActor func `pausing realtime without a relay identity resets the visible phase`() async {
         let runtime = TalkModeRuntime()
         let player = RuntimeTestPCMPlayer()
         let session = RealtimeTalkRelaySession(
@@ -261,19 +272,78 @@ struct TalkModeRuntimeSpeechTests {
             pcmPlayer: player,
             onStatus: { _ in },
             onSpeakingChanged: { _ in })
-        _ = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+        let relayGeneration = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
         TalkModeController.shared.updatePhase(.speaking)
         TalkModeController.shared.updateLevel(0.8)
+        TalkModeController.shared.updatePartialTranscript("stale")
 
         await runtime.setPaused(true)
+        await runtime.handleRealtimeSpeakingChanged(true, relayGeneration: relayGeneration)
+        await runtime.handleRealtimeInputLevel(0.9, relayGeneration: relayGeneration)
+        await runtime.handleRealtimeOutputLevel(0.8, relayGeneration: relayGeneration)
+        await runtime.handleRealtimeTranscript(
+            .init(role: "user", text: "late transcript", isFinal: false),
+            relayGeneration: relayGeneration)
 
         #expect(await runtime._test_phase() == .idle)
         #expect(TalkModeController.shared.phase == .idle)
         #expect(TalkModeController.shared.level == 0)
-        #expect(player.stopCount == 1)
+        #expect(TalkModeController.shared.partialTranscript.isEmpty)
+        #expect(player.stopCount == 0)
 
         await runtime._test_cancelRealtimeRecovery()
         session.stop()
+    }
+
+    @Test @MainActor func `resuming realtime restarts input and reuses the relay`() async throws {
+        let runtime = TalkModeRuntime()
+        let audioCapture = RuntimeTestAudioCapture()
+        let player = RuntimeTestPCMPlayer()
+        let (events, eventContinuation) = AsyncStream<EventFrame>.makeStream()
+        let result = TalkSessionCreateResult(
+            sessionid: "talk-session",
+            mode: AnyCodable("realtime"),
+            transport: AnyCodable("gateway-relay"),
+            brain: AnyCodable("agent-consult"),
+            relaysessionid: "relay-1")
+        let resultData = try JSONEncoder().encode(result)
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in events },
+                request: { method, _, _ in
+                    if method == "talk.session.create" {
+                        eventContinuation.yield(EventFrame(
+                            type: "event",
+                            event: "talk.event",
+                            payload: AnyCodable([
+                                "relaySessionId": "relay-1",
+                                "type": "ready",
+                            ]),
+                            seq: nil,
+                            stateversion: nil))
+                        return resultData
+                    }
+                    return Data("{\"ok\":true}".utf8)
+                }),
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            audioCapture: audioCapture,
+            pcmPlayer: player,
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        try await session.start()
+        let relayGeneration = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+
+        await runtime.setPaused(true)
+        await runtime.setPaused(false)
+
+        #expect(audioCapture.startCount == 2)
+        #expect(await runtime._test_realtimeSessionIs(session))
+        await runtime.handleRealtimeSpeakingChanged(true, relayGeneration: relayGeneration)
+        #expect(await runtime._test_phase() == .speaking)
+
+        await runtime._test_cancelRealtimeRecovery()
+        session.stop()
+        eventContinuation.finish()
     }
 
     @Test @MainActor func `disabling during relay startup stops the published session`() async {
@@ -309,9 +379,18 @@ struct TalkModeRuntimeSpeechTests {
         #expect(player.stopCount == 1)
     }
 
-    @Test @MainActor func `pausing during relay startup stops the published session`() async {
+    @Test(arguments: [
+        RuntimeRelayStartupPauseOutcome.resume,
+        .remainPaused,
+        .disable,
+    ])
+    @MainActor
+    func `relay startup pause retries only a matching resume`(
+        outcome: RuntimeRelayStartupPauseOutcome) async
+    {
         let runtime = TalkModeRuntime()
         let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        await runtime._test_enableRealtimeRelaySelection()
         let barrier = RuntimeContinuationBarrier()
         let probe = RuntimeCommitProbe()
         let player = RuntimeTestPCMPlayer()
@@ -334,12 +413,20 @@ struct TalkModeRuntimeSpeechTests {
         await barrier.waitUntilEntered()
         #expect(await runtime._test_realtimeSessionIs(session))
         await runtime.setPaused(true)
+        if outcome != .remainPaused {
+            await runtime.setPaused(false)
+        }
+        if outcome == .disable {
+            await runtime.setEnabled(false)
+        }
         await barrier.release()
 
         #expect(await attempt.value == false)
         #expect(await runtime._test_realtimeSessionIsActive() == false)
-        #expect(probe.values() == ["start"])
-        #expect(player.stopCount == 2)
+        if await runtime.consumePendingRealtimeRelayStart() { probe.record("retry") }
+        if await runtime.consumePendingRealtimeRelayStart() { probe.record("retry") }
+        #expect(probe.values() == (outcome == .resume ? ["start", "retry"] : ["start"]))
+        #expect(player.stopCount == 1)
 
         await runtime.setEnabled(false)
     }
