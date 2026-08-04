@@ -296,9 +296,7 @@ type OpenAIRealtimeApiKeyResolution =
 const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =
   "OpenAI Realtime voice requires an OpenAI Platform API key";
 const OPENAI_GPT_LIVE_AUTH_REQUIRED =
-  "GPT-Live Talk requires either an OpenAI Platform API key or a ChatGPT OAuth subscription profile";
-const OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE =
-  "GPT-Live Talk requires a working OpenAI Platform API key or ChatGPT OAuth subscription profile. The selected Platform API-key source could not be resolved, so OAuth fallback was not used; fix or remove it.";
+  "GPT-Live Talk requires an OpenAI Platform API key with /v1/live access";
 const OPENAI_REALTIME_API_KEY_REQUIRED = "OpenAI Realtime voice requires an API key";
 const OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED =
   "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source";
@@ -504,30 +502,13 @@ async function requireOpenAIRealtimePlatformAuth(params: {
   throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
 }
 
-async function resolveOpenAIQuicksilverBridgeAuth(params: {
+async function requireOpenAIQuicksilverPlatformAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
-  agentId?: string;
 }) {
-  const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
-    cfg: params.cfg,
-    agentDir:
-      params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-  });
-  if (subscriptionAuth) {
-    return subscriptionAuth;
-  }
   const platformAuth = await resolveOpenAIRealtimePlatformAuth(params);
   if (platformAuth.status === "available") {
     return { type: "api-key" as const, token: platformAuth.value };
-  }
-  if (
-    hasOpenAIRealtimePlatformAuthInput({
-      configuredApiKey: params.configuredApiKey,
-      cfg: params.cfg,
-    })
-  ) {
-    throw new Error(OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE);
   }
   throw new Error(OPENAI_GPT_LIVE_AUTH_REQUIRED);
 }
@@ -1904,39 +1885,13 @@ async function createOpenAIRealtimeBrowserSession(
       instructions: buildOpenAIQuicksilverInstructions(req.instructions),
       ...(req.voice ? {} : configuredVoice ? { voice: configuredVoice } : {}),
     };
-    const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
-      cfg: req.cfg,
-      agentDir: req.cfg ? resolveAgentDir(req.cfg, req.agentId) : undefined,
-    });
-    if (subscriptionAuth) {
-      const session = await quicksilverBroker.createBrowserSession(
-        quicksilverRequest,
-        subscriptionAuth,
-      );
-      quicksilverBrokerBySession.set(session, quicksilverBroker);
-      return session;
-    }
-    const auth = await resolveOpenAIRealtimePlatformAuth({
+    const auth = await requireOpenAIQuicksilverPlatformAuth({
       configuredApiKey: config.apiKey,
       cfg: req.cfg,
     });
-    if (auth.status === "available") {
-      const session = await quicksilverBroker.createBrowserSession(quicksilverRequest, {
-        type: "api-key",
-        token: auth.value,
-      });
-      quicksilverBrokerBySession.set(session, quicksilverBroker);
-      return session;
-    }
-    if (
-      hasOpenAIRealtimePlatformAuthInput({
-        configuredApiKey: config.apiKey,
-        cfg: req.cfg,
-      })
-    ) {
-      throw new Error(OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE);
-    }
-    throw new Error(OPENAI_GPT_LIVE_AUTH_REQUIRED);
+    const session = await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
+    quicksilverBrokerBySession.set(session, quicksilverBroker);
+    return session;
   }
   const auth = await resolveOpenAIRealtimePlatformAuth({
     configuredApiKey: config.apiKey,
@@ -2085,10 +2040,9 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
             instructions: buildOpenAIQuicksilverInstructions(req.instructions),
             logger: options?.logger ?? { debug: () => undefined, warn: () => undefined },
             resolveAuth: () =>
-              resolveOpenAIQuicksilverBridgeAuth({
+              requireOpenAIQuicksilverPlatformAuth({
                 configuredApiKey: config.apiKey,
                 cfg: req.cfg,
-                agentId: req.agentId,
               }),
           });
         }
@@ -2145,11 +2099,10 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
         }
         return (
           options?.quicksilverBrowserSessionBroker !== undefined &&
-          (hasOpenAIRealtimePlatformAuthInput({
+          hasOpenAIRealtimePlatformAuthInput({
             configuredApiKey: config.apiKey,
             cfg,
-          }) ||
-            hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }))
+          })
         );
       }
       return (
@@ -2181,11 +2134,10 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
       }
       return (
         isSupportedOpenAIGptLiveModel(config.model) &&
-        (hasOpenAIRealtimePlatformAuthInput({
+        hasOpenAIRealtimePlatformAuthInput({
           configuredApiKey: config.apiKey,
           cfg,
-        }) ||
-          hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }))
+        })
       );
     },
     resolveGatewayRelayCapabilities: ({ providerConfig, model }) => {

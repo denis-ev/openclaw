@@ -98,29 +98,25 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 }
 ```
 
-OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live through
-`https://api.openai.com/v1/live`. Set `talk.realtime.model` to
-`gpt-live-1-codex` (recommended) or `gpt-live-1-boulder-alpha`; `gpt-live-1`
-and `gpt-live-1-mini` are not valid on this route. Browser and Gateway-relay
-WebRTC prefer a ChatGPT OAuth subscription profile and fall back to Platform
-API-key auth. Other backend bridges connect directly over the Frameless Bidi
-WebSocket and require Platform API-key auth, whose `/v1/live` access is currently
+OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Set
+`talk.realtime.model` to `gpt-live-1-codex` (recommended) or
+`gpt-live-1-boulder-alpha`; `gpt-live-1` and `gpt-live-1-mini` are not valid.
+GPT-Live requires Platform API-key auth through the Frameless Bidi `/v1/live`
+route, whose access is currently
 [waitlist-gated](https://openai.com/form/gpt-live-1-in-the-api/).
 
 The quickest setup is the Control UI: **Settings → Talk**, pick **OpenAI** and
-a `gpt-live-*` model. The OAuth prerequisite is an OpenClaw auth profile
-created with `openclaw models auth login --provider openai` — an existing
-Codex CLI sign-in is not read. GPT-Live also requires the bundled `openai`
-plugin registered in full mode; a restrictive `plugins.allow` list fails
+a `gpt-live-*` model. A ChatGPT/Codex OAuth profile does not configure
+GPT-Live. GPT-Live also requires the bundled `openai` plugin registered in full
+mode; a restrictive `plugins.allow` list fails
 session creation with "OpenAI GPT-Live browser session broker is unavailable".
 Runtime bounds: 8 concurrent sessions per Gateway and a 30-minute session TTL.
 Browser sessions also use 60-second single-use offer tokens.
 
 GPT-Live accepts `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`,
 `sage`, `shimmer`, and `verse`. A `403 Voice session access denied` response is
-overloaded: an invalid voice returns the same response. The legacy
-`chatgpt.com` backend route also returns `403`; OpenClaw uses the native
-`api.openai.com/v1/live` route instead.
+overloaded: it can mean the Platform project lacks GPT-Live access, or that the
+voice or model is invalid for the selected route.
 
 | Consumer                    | GPT-Live status                                                         |
 | --------------------------- | ----------------------------------------------------------------------- |
@@ -131,26 +127,21 @@ overloaded: an invalid voice returns the same response. The legacy
 | iOS client-owned Talk       | Pending                                                                 |
 | Android realtime Talk       | Pending an Android device live-proof flip; Android stays on native Talk |
 
-The Gateway-owned WebRTC route keeps OAuth and Platform credentials away from
-relay clients. Backend WebSocket paths keep the Platform key on the Gateway;
+The Gateway-owned WebRTC route keeps Platform credentials away from relay
+clients. Backend WebSocket paths also keep the Platform key on the Gateway;
 OpenClaw converts telephony G.711 u-law audio to and from GPT-Live's 24 kHz PCM
 contract.
 
 For GA `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, and `gpt-realtime-2`
 browser sessions, Platform credentials remain preferred in this order: the
 configured realtime API key, an `openai` API-key profile, then
-`OPENAI_API_KEY`. With none configured, browser Talk falls back to an OpenClaw
-ChatGPT OAuth profile and exchanges SDP through the Gateway's single-use offer
-broker, so the OAuth token never reaches the browser. A configured Platform
-credential that cannot be resolved fails closed instead of silently falling
-through to OAuth.
+`OPENAI_API_KEY`. GA realtime voice does not fall back to ChatGPT OAuth. A
+configured Platform credential that cannot be resolved fails closed.
 
 iOS client-owned WebRTC, Voice Call, GA Gateway relay, provider WebSocket
 transports, Discord realtime voice, and Android realtime remain
-Platform-key-only. GA browser Talk keeps the existing client-owned data channel
-and `talk.client.toolCall` loop; only the credential owner and SDP exchange path
-change under OAuth. GPT-Live Gateway relay prefers ChatGPT OAuth and falls back
-to waitlist-enabled Platform access.
+Platform-key-only. GPT-Live browser and Gateway-relay sessions also require the
+first available Platform credential.
 
 | Key                                      | Default                                    | Notes                                                                                                                                                                                                                                                                                   |
 | ---------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

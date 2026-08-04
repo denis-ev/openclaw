@@ -350,17 +350,21 @@ function decodeOpenAIQuicksilverCallId(params: {
   return callId;
 }
 
-function describeOpenAIQuicksilverCallError(status: number, detail: string): string {
+function describeOpenAIQuicksilverCallError(
+  status: number,
+  detail: string,
+  auth: OpenAIQuicksilverAuth,
+): string {
   const normalized = detail.toLowerCase();
   if (status === 403) {
-    return "GPT-Live rejected the session (403). This overloaded response most often means the voice or model is invalid for /v1/live. Accepted voices: alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse. Accepted models: gpt-live-1-codex, gpt-live-1-boulder-alpha. Account access may also be unavailable; verify the selected ChatGPT OAuth profile and chatgpt-account-id.";
+    return "GPT-Live rejected the Platform session (403). Verify API-key access, voice, and model for /v1/live. Accepted voices: alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse. Accepted models: gpt-live-1-codex, gpt-live-1-boulder-alpha.";
   }
   if (
     status === 400 &&
     (normalized.includes("model_not_found") ||
       normalized.includes("does not exist or you do not have access"))
   ) {
-    return `OpenAI Platform API-key access to /v1/live is waitlist-gated. Use a ChatGPT OAuth profile or request access at ${OPENAI_GPT_LIVE_WAITLIST_URL}`;
+    return `OpenAI Platform API-key access to /v1/live is waitlist-gated. Request access at ${OPENAI_GPT_LIVE_WAITLIST_URL}`;
   }
   if (
     status === 400 &&
@@ -390,6 +394,14 @@ export async function createOpenAIQuicksilverCall(params: {
   | { kind: "ga-realtime"; status: number; answerSdp: string }
 > {
   const isGptLive = isOpenAIGptLiveModel(params.session.model);
+  if (isGptLive && params.auth.type === "oauth") {
+    throw new OpenAIQuicksilverCallError(
+      "GPT-Live ChatGPT OAuth is disabled until the upstream sideband join is proven; configure an OpenAI Platform API key with /v1/live access",
+    );
+  }
+  const callUrl = isGptLive
+    ? OPENAI_QUICKSILVER_CALL_URL
+    : `${OPENAI_REALTIME_CALL_URL}?model=${encodeURIComponent(params.session.model)}`;
   const authHeaders = isGptLive
     ? openAIQuicksilverAuthHeaders(params.auth, params.requestIds)
     : openAIRealtimeAuthHeaders({
@@ -404,9 +416,6 @@ export async function createOpenAIQuicksilverCall(params: {
         session: params.session,
       })
     : undefined;
-  const callUrl = isGptLive
-    ? OPENAI_QUICKSILVER_CALL_URL
-    : `${OPENAI_REALTIME_CALL_URL}?model=${encodeURIComponent(params.session.model)}`;
 
   const response = await (params.fetchImpl ?? fetch)(callUrl, {
     method: "POST",
@@ -427,7 +436,7 @@ export async function createOpenAIQuicksilverCall(params: {
       .slice(0, OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS);
     throw new OpenAIQuicksilverCallError(
       isGptLive
-        ? describeOpenAIQuicksilverCallError(response.status, detail)
+        ? describeOpenAIQuicksilverCallError(response.status, detail, params.auth)
         : `OpenAI Realtime call creation failed (${response.status})${detail ? `: ${detail}` : ""}`,
       response.status,
     );
@@ -449,8 +458,10 @@ export async function createOpenAIQuicksilverCall(params: {
   const callId = decodeOpenAIQuicksilverCallId({
     location: response.headers.get("Location"),
     openAiSessionId: response.headers.get("openai-session-id"),
-    callUrl: OPENAI_QUICKSILVER_CALL_URL,
+    callUrl,
   });
+  // Call creation and sideband must share the direct Realtime registry. A
+  // ChatGPT-origin call id cannot currently be joined on this endpoint.
   return {
     kind: "gpt-live",
     status: response.status,
