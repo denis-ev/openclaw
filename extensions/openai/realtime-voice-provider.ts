@@ -1,7 +1,6 @@
 // Openai provider module implements model/runtime integration.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -54,7 +53,6 @@ import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instr
 import {
   createOpenAIQuicksilverBrowserSessionBroker,
   OPENAI_QUICKSILVER_CAPABILITIES,
-  resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
 import {
   isOpenAIGptLiveModel,
@@ -531,20 +529,6 @@ function hasOpenAIRealtimePlatformAuthInput(params: {
     return true;
   }
   return hasOpenAIRealtimeApiKeyInput(undefined);
-}
-
-function hasOpenAIChatGptSubscriptionAuthInput(params: {
-  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-  agentId?: string;
-}): boolean {
-  return isProviderAuthProfileConfigured({
-    provider: "openai",
-    cfg: params.cfg,
-    agentDir:
-      params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-    profileTypes: ["oauth"],
-    includeExternalCliAuth: false,
-  });
 }
 
 function isOpenAIRealtimeMaxSessionDurationError(detail: string): boolean {
@@ -1898,34 +1882,7 @@ async function createOpenAIRealtimeBrowserSession(
     cfg: req.cfg,
   });
   if (auth.status === "missing") {
-    if (
-      hasOpenAIRealtimePlatformAuthInput({
-        configuredApiKey: config.apiKey,
-        cfg: req.cfg,
-      })
-    ) {
-      throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
-    }
-    const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
-      cfg: req.cfg,
-      agentDir: req.cfg ? resolveAgentDir(req.cfg, req.agentId) : undefined,
-    });
-    if (!subscriptionAuth) {
-      throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
-    }
-    if (!quicksilverBroker) {
-      throw new Error("OpenAI realtime browser session broker is unavailable");
-    }
-    const session = await quicksilverBroker.createBrowserSession(
-      {
-        ...req,
-        model,
-        voice: normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy",
-      },
-      subscriptionAuth,
-    );
-    quicksilverBrokerBySession.set(session, quicksilverBroker);
-    return session;
+    throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
   }
 
   const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
@@ -2087,7 +2044,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
       ),
   };
   const internalApi: OpenAIInternalRealtimeVoiceProviderApi = {
-    isBrowserSessionConfigured: ({ cfg, providerConfig, agentId }) => {
+    isBrowserSessionConfigured: ({ cfg, providerConfig }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.azureEndpoint || config.azureDeployment) {
         return false;
@@ -2105,14 +2062,10 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
           })
         );
       }
-      return (
-        hasOpenAIRealtimePlatformAuthInput({
-          configuredApiKey: config.apiKey,
-          cfg,
-        }) ||
-        (options?.quicksilverBrowserSessionBroker !== undefined &&
-          hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }))
-      );
+      return hasOpenAIRealtimePlatformAuthInput({
+        configuredApiKey: config.apiKey,
+        cfg,
+      });
     },
     resolveBrowserSessionCapabilities: ({ providerConfig, model }) => {
       const config = normalizeProviderConfig(providerConfig);
@@ -2124,7 +2077,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
       }
       return OPENAI_REALTIME_CAPABILITIES;
     },
-    isGatewayRelayConfigured: ({ cfg, providerConfig, agentId }) => {
+    isGatewayRelayConfigured: ({ cfg, providerConfig }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (!isOpenAIGptLiveModel(config.model)) {
         return undefined;
