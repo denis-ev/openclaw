@@ -1,6 +1,6 @@
 // Diagnostic stability helpers compare diagnostic outputs across runs.
 import {
-  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
@@ -733,7 +733,9 @@ export function startDiagnosticStabilityRecorder(): void {
   if (state.unsubscribe) {
     return;
   }
-  state.unsubscribe = onDiagnosticEvent((event) => {
+  // Model-call instrumentation is trusted core telemetry. Record both trust
+  // classes here, then retain only the bounded payload-free projection.
+  state.unsubscribe = onInternalDiagnosticEvent((event) => {
     appendRecord(sanitizeDiagnosticEvent(event));
   });
 }
