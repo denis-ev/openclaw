@@ -27,6 +27,7 @@ import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-stat
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-ledger.js";
 import {
   acknowledgeTalkRealtimeRelayMark,
+  cancelTalkRealtimeRelayOutput,
   cancelTalkRealtimeRelayTurn,
   closeTalkRealtimeRelaySessionsForConnection,
   createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
@@ -2773,6 +2774,61 @@ describe("talk realtime gateway relay", () => {
     expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expectChatAbortPayload(broadcast, "barge-in");
     expectNodeAbortPayload(nodeSendToSession);
+  });
+
+  it("cancels relay output without aborting the active turn or agent consult", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return bridge;
+      },
+    };
+    const { abortController, broadcast, broadcastToConnIds, session } =
+      createAbortableRelayRunFixture(provider);
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from("input").toString("base64"),
+    });
+    const activeTurnId = relaySessions.get(session.relaySessionId)?.harness.talk.activeTurnId;
+    bridgeRequest?.onAudio(Buffer.from("output"));
+
+    cancelTalkRealtimeRelayOutput({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      turnId: activeTurnId,
+      reason: "barge-in",
+    });
+
+    expect(bridge.handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
+    expect(abortController.signal.aborted).toBe(false);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ runId: "run-1", state: "aborted" }),
+      expect.anything(),
+    );
+    expect(relaySessions.get(session.relaySessionId)?.harness.talk.activeTurnId).toBe(activeTurnId);
+    expect(
+      broadcastToConnIds.mock.calls.some(
+        (call) =>
+          (call[1] as { type?: string; talkEvent?: { type?: string } }).type === "clear" &&
+          (call[1] as { talkEvent?: { type?: string } }).talkEvent?.type === "output.audio.done",
+      ),
+    ).toBe(true);
   });
 
   it("terminally satisfies a late normal result after turn cancellation without a new turn", async () => {

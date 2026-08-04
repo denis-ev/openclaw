@@ -539,6 +539,35 @@ export function cancelTalkRealtimeRelayTurn(params: {
   });
 }
 
+/** Cancels provider/playback output without aborting the owning Talk turn or agent work. */
+export function cancelTalkRealtimeRelayOutput(params: {
+  relaySessionId: string;
+  connId: string;
+  turnId?: string;
+  reason?: string;
+}): void {
+  const session = getRelaySession(params.relaySessionId, params.connId);
+  const requestedTurnId = params.turnId?.trim();
+  const activeTurnId = session.harness.talk.activeTurnId;
+  if (!activeTurnId || (requestedTurnId && requestedTurnId !== activeTurnId)) {
+    return;
+  }
+  const reason = params.reason ?? "output-cancelled";
+  session.harness.handleBargeIn({ audioPlaybackActive: true }, noFallbackRelayOutputFlush);
+  const outputDone = session.harness.talk.finishOutputAudio({
+    turnId: activeTurnId,
+    payload: { reason },
+  });
+  if (!outputDone) {
+    return;
+  }
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "clear",
+    talkEvent: outputDone,
+  });
+}
+
 /** Drops one provider generation without sending cancellation into its replacement. */
 export function resetTalkRealtimeRelayContinuity(
   session: RelaySession,
