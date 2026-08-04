@@ -465,7 +465,11 @@ function resolveSimpleBedrockOptions(
   }
 
   if (options.reasoning === "off") {
-    return { ...base, reasoning: "off" } satisfies BedrockOptions;
+    return {
+      ...base,
+      maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
+      reasoning: "off",
+    } satisfies BedrockOptions;
   }
 
   if (isAnthropicClaudeModel(model)) {
