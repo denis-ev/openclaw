@@ -135,13 +135,17 @@ contract.
 For GA `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, and `gpt-realtime-2`
 browser sessions, Platform credentials remain preferred in this order: the
 configured realtime API key, an `openai` API-key profile, then
-`OPENAI_API_KEY`. GA realtime voice does not fall back to ChatGPT OAuth. A
-configured Platform credential that cannot be resolved fails closed.
+`OPENAI_API_KEY`. With none configured, browser Talk falls back to an OpenClaw
+ChatGPT OAuth profile and exchanges SDP through the Gateway's single-use offer
+broker, so the OAuth token never reaches the browser. A configured Platform
+credential that cannot be resolved fails closed instead of silently falling
+through to OAuth.
 
 iOS client-owned WebRTC, Voice Call, GA Gateway relay, provider WebSocket
 transports, Discord realtime voice, and Android realtime remain
 Platform-key-only. GPT-Live browser and Gateway-relay sessions also require the
-first available Platform credential.
+first available Platform credential; OAuth-only GPT-Live remains disabled until
+the upstream call and sideband ownership contract is proven end to end.
 
 | Key                                      | Default                                    | Notes                                                                                                                                                                                                                                                                                   |
 | ---------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

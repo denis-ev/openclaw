@@ -154,20 +154,22 @@ explicit runtime config.
 | Text-to-speech            | `tts.provider: "openai"` / `tts`                                                              | Yes                                                             |
 | Batch speech-to-text      | `tools.media.audio` / media understanding                                                     | Yes                                                             |
 | Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                                                     | Yes                                                             |
-| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk `talk.realtime.provider: "openai"` | Yes (Platform API key)                                          |
+| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk `talk.realtime.provider: "openai"` | Yes (Platform API key; ChatGPT OAuth for GA browser Talk)       |
 | Embeddings                | memory embedding provider                                                                     | Yes                                                             |
 
 <Note>
 GA OpenAI Realtime voice goes through the public **OpenAI Platform Realtime
-API** and requires a Platform API key. GPT-Live uses the Platform Frameless
-Bidi `/v1/live` route and also requires Platform API-key auth. ChatGPT/Codex
-OAuth does not configure realtime voice.
+API** and normally requires a Platform API key. Browser Talk can instead use a
+ChatGPT OAuth profile through the Gateway-owned WebRTC offer broker. GPT-Live
+uses the Platform Frameless Bidi `/v1/live` route and requires Platform API-key
+auth.
 
 Platform auth is resolved in this order: configured realtime API key, `openai`
-API-key profile, then `OPENAI_API_KEY`. ChatGPT OAuth does not configure GA
-Talk, Voice Call, Discord realtime voice, or realtime transcription. A
-configured Platform credential that cannot be resolved fails closed instead
-of falling through to OAuth.
+API-key profile, then `OPENAI_API_KEY`. GA browser Talk falls back to ChatGPT
+OAuth only when no Platform credential source is configured. ChatGPT OAuth does
+not configure GPT-Live, Voice Call, Discord realtime voice, or realtime
+transcription. A configured Platform credential that cannot be resolved fails
+closed instead of falling through to OAuth.
 
 If API-key auth reports missing billing, top up Platform credits at
 [platform.openai.com/account/billing](https://platform.openai.com/account/billing)
@@ -833,10 +835,11 @@ compatibility fallback when the shared
 
     <Note>
     Set `OPENAI_TTS_BASE_URL` to override the TTS base URL without affecting
-    the chat API endpoint. OpenAI TTS and GA Realtime voice are configured
-    through an OpenAI Platform API key. OAuth-only installs can use
-    Codex-backed chat models, but realtime voice, OpenAI TTS, iOS Realtime
-    WebRTC, Voice Call, and Discord realtime voice require a Platform API key.
+    the chat API endpoint. OpenAI TTS and most Realtime voice surfaces are
+    configured through an OpenAI Platform API key. OAuth-only installs can use
+    Codex-backed chat models plus GA Realtime browser Talk. They cannot use
+    OpenAI TTS, GPT-Live, iOS Realtime WebRTC, Voice Call, Gateway relay, or
+    Discord realtime voice without a Platform API key.
     </Note>
 
   </Accordion>
@@ -924,18 +927,26 @@ compatibility fallback when the shared
     Set the model explicitly to `gpt-realtime-2.1-mini` when you prefer the
     smaller, lower-cost Realtime 2.1 variant.
 
-    #### GA Realtime browser Talk
+    #### GA Realtime browser Talk over ChatGPT OAuth
 
     Browser Talk can use `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, or
-    `gpt-realtime-2` with Platform API-key auth. Platform auth is resolved in
-    this order: the configured realtime key, an `openai` API-key profile, then
-    `OPENAI_API_KEY`. The Gateway mints an ephemeral client secret and the
-    browser exchanges SDP directly with OpenAI.
+    `gpt-realtime-2` with either Platform API-key auth or an OpenClaw ChatGPT
+    OAuth subscription profile. Platform auth keeps precedence in this order:
+    the configured realtime key, an `openai` API-key profile, then
+    `OPENAI_API_KEY`. When none is configured, the Gateway falls back to the
+    ChatGPT OAuth profile created by
+    `openclaw models auth login --provider openai`.
 
-    ChatGPT OAuth does not configure GA Realtime voice. Browser Talk, iOS
-    client-owned WebRTC, Voice Call, Gateway relay, provider WebSocket
-    transports, Discord realtime voice, and other backend GA Realtime bridges
-    remain Platform-key-only.
+    Platform auth mints an ephemeral client secret and the browser exchanges SDP
+    directly with OpenAI. OAuth auth stays in the Gateway: the single-use offer
+    broker sends raw `application/sdp` to
+    `/v1/realtime/calls?model=<model>` and returns only the answer SDP. The OAuth
+    token never reaches the browser. A configured Platform credential that
+    cannot be resolved still fails closed.
+
+    This OAuth fallback is browser-only. iOS client-owned WebRTC, Voice Call,
+    Gateway relay, provider WebSocket transports, Discord realtime voice, and
+    other backend GA Realtime bridges remain Platform-key-only.
 
     #### GPT-Live transport paths
 
@@ -1050,12 +1061,12 @@ compatibility fallback when the shared
     `gpt-realtime-*` models use a Gateway-minted ephemeral client secret and a
     direct browser SDP exchange when Platform credentials are available.
     Configured realtime keys, API-key profiles, and `OPENAI_API_KEY` use that
-    path in that order. GA browser Talk does not fall back to ChatGPT OAuth.
-    GPT-Live also uses the first available Platform credential and does not
-    fall back to ChatGPT OAuth. GA Gateway relay and Voice Call backend realtime
-    WebSocket bridges require Platform credentials. GPT-Live Gateway relay uses
-    Gateway-owned WebRTC; Voice Call GPT-Live uses the Platform-key backend
-    WebSocket.
+    path in that order. With no Platform source, GA browser Talk falls back to
+    the Gateway-owned ChatGPT OAuth offer broker. GPT-Live uses the first
+    available Platform credential and does not fall back to ChatGPT OAuth. GA
+    Gateway relay and Voice Call backend realtime WebSocket bridges require
+    Platform credentials. GPT-Live Gateway relay uses Gateway-owned WebRTC;
+    Voice Call GPT-Live uses the Platform-key backend WebSocket.
     Maintainer live verification is available with
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
     the OpenAI legs verify the backend WebSocket bridge, a synthesized PCM24
