@@ -455,6 +455,7 @@ function normalizeOpenAIRealtimeTools(
 async function resolveOpenAIRealtimePlatformAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+  agentId?: string;
 }): Promise<OpenAIRealtimeApiKeyResolution> {
   const configured = resolveOpenAIRealtimeSecretInput(params.configuredApiKey);
   if (
@@ -464,9 +465,12 @@ async function resolveOpenAIRealtimePlatformAuth(params: {
     return configured;
   }
 
+  const agentDir =
+    params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined;
   const profileApiKey = await resolveProviderAuthProfileApiKey({
     provider: "openai",
     cfg: params.cfg,
+    ...(agentDir ? { agentDir } : {}),
     profileTypes: ["api_key"],
     includeExternalCliAuth: false,
   });
@@ -476,6 +480,7 @@ async function resolveOpenAIRealtimePlatformAuth(params: {
   const hasConfiguredApiKeyProfile = isProviderAuthProfileConfigured({
     provider: "openai",
     cfg: params.cfg,
+    ...(agentDir ? { agentDir } : {}),
     profileTypes: ["api_key"],
     includeExternalCliAuth: false,
   });
@@ -494,6 +499,7 @@ async function resolveOpenAIRealtimePlatformAuth(params: {
 async function requireOpenAIRealtimePlatformAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+  agentId?: string;
 }): Promise<Extract<OpenAIRealtimeApiKeyResolution, { status: "available" }>> {
   const resolved = await resolveOpenAIRealtimePlatformAuth(params);
   if (resolved.status === "available") {
@@ -505,6 +511,7 @@ async function requireOpenAIRealtimePlatformAuth(params: {
 async function requireOpenAIQuicksilverPlatformAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
+  agentId?: string;
 }) {
   const platformAuth = await resolveOpenAIRealtimePlatformAuth(params);
   if (platformAuth.status === "available") {
@@ -516,14 +523,18 @@ async function requireOpenAIQuicksilverPlatformAuth(params: {
 function hasOpenAIRealtimePlatformAuthInput(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+  agentId?: string;
 }): boolean {
   if (hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)) {
     return true;
   }
+  const agentDir =
+    params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined;
   if (
     isProviderAuthProfileConfigured({
       provider: "openai",
       cfg: params.cfg,
+      ...(agentDir ? { agentDir } : {}),
       profileTypes: ["api_key"],
       includeExternalCliAuth: false,
     })
@@ -1018,6 +1029,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     const auth = await requireOpenAIRealtimePlatformAuth({
       configuredApiKey: this.config.apiKey,
       cfg: this.config.cfg,
+      agentId: this.config.agentId,
     });
     return this.resolveApiKeyConnectionParams(auth.value, model);
   }
@@ -1888,6 +1900,7 @@ async function createOpenAIRealtimeBrowserSession(
     const auth = await requireOpenAIQuicksilverPlatformAuth({
       configuredApiKey: config.apiKey,
       cfg: req.cfg,
+      agentId: req.agentId,
     });
     const session = await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
     quicksilverBrokerBySession.set(session, quicksilverBroker);
@@ -1896,12 +1909,14 @@ async function createOpenAIRealtimeBrowserSession(
   const auth = await resolveOpenAIRealtimePlatformAuth({
     configuredApiKey: config.apiKey,
     cfg: req.cfg,
+    agentId: req.agentId,
   });
   if (auth.status === "missing") {
     if (
       hasOpenAIRealtimePlatformAuthInput({
         configuredApiKey: config.apiKey,
         cfg: req.cfg,
+        agentId: req.agentId,
       })
     ) {
       throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
@@ -2043,6 +2058,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
               requireOpenAIQuicksilverPlatformAuth({
                 configuredApiKey: config.apiKey,
                 cfg: req.cfg,
+                agentId: req.agentId,
               }),
           });
         }
@@ -2057,6 +2073,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
               await requireOpenAIRealtimePlatformAuth({
                 configuredApiKey: config.apiKey,
                 cfg: req.cfg,
+                agentId: req.agentId,
               })
             ).value,
           }),
@@ -2102,6 +2119,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
           hasOpenAIRealtimePlatformAuthInput({
             configuredApiKey: config.apiKey,
             cfg,
+            agentId,
           })
         );
       }
@@ -2109,6 +2127,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
         hasOpenAIRealtimePlatformAuthInput({
           configuredApiKey: config.apiKey,
           cfg,
+          agentId,
         }) ||
         (options?.quicksilverBrowserSessionBroker !== undefined &&
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }))
@@ -2124,7 +2143,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
       }
       return OPENAI_REALTIME_CAPABILITIES;
     },
-    isGatewayRelayConfigured: ({ cfg, providerConfig }) => {
+    isGatewayRelayConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (!isOpenAIGptLiveModel(config.model)) {
         return undefined;
@@ -2137,6 +2156,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
         hasOpenAIRealtimePlatformAuthInput({
           configuredApiKey: config.apiKey,
           cfg,
+          agentId,
         })
       );
     },
