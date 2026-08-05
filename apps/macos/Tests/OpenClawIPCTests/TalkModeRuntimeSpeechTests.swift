@@ -75,6 +75,18 @@ private final class RuntimeCommitProbe: @unchecked Sendable {
     }
 }
 
+private final class RuntimeRecognitionCapture {
+    let name: String
+
+    init(_ name: String) {
+        self.name = name
+    }
+}
+
+private enum RuntimeRecognitionStartError: Error {
+    case failed
+}
+
 @MainActor
 private func makeRuntimeTestRealtimeSession(
     player: RuntimeTestPCMPlayer) -> RealtimeTalkRelaySession
@@ -332,46 +344,62 @@ struct TalkModeRuntimeSpeechTests {
         await runtime.setEnabled(false)
     }
 
-    @Test @MainActor func `disabling during recognition preparation prevents capture commit`() async {
-        let runtime = TalkModeRuntime()
-        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
-        let barrier = RuntimeContinuationBarrier()
+    @Test func `processed recognition start failure retries a fresh raw capture`() {
         let probe = RuntimeCommitProbe()
-        let attempt = Task {
-            await runtime._test_startRecognitionAttempt(
-                lifecycleGeneration: lifecycleGeneration,
-                prepare: { await barrier.wait() },
-                commit: { probe.record("commit") })
-        }
 
-        await barrier.waitUntilEntered()
-        await runtime.setEnabled(false)
-        await barrier.release()
+        let started = TalkRecognitionCaptureLifecycle.start(
+            isCurrent: { true },
+            prepare: { enableVoiceProcessing -> RuntimeRecognitionCapture in
+                if enableVoiceProcessing {
+                    probe.record("prepare-processed")
+                    probe.record("cleanup-processed")
+                    throw RuntimeRecognitionStartError.failed
+                }
+                probe.record("prepare-raw")
+                return RuntimeRecognitionCapture("raw")
+            },
+            discard: { probe.record("discard-\($0.name)") },
+            publish: { probe.record("publish-\($0.name)") },
+            onFailure: { enableVoiceProcessing, _ in
+                probe.record(enableVoiceProcessing ? "failed-processed" : "failed-raw")
+            })
 
-        #expect(await attempt.value == false)
-        #expect(probe.values().isEmpty)
+        #expect(started)
+        #expect(probe.values() == [
+            "prepare-processed",
+            "cleanup-processed",
+            "failed-processed",
+            "prepare-raw",
+            "publish-raw",
+        ])
     }
 
-    @Test @MainActor func `pausing during recognition preparation prevents capture commit`() async {
-        let runtime = TalkModeRuntime()
-        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
-        let barrier = RuntimeContinuationBarrier()
+    @Test func `failed recognition candidates clean up without publishing`() {
         let probe = RuntimeCommitProbe()
-        let attempt = Task {
-            await runtime._test_startRecognitionAttempt(
-                lifecycleGeneration: lifecycleGeneration,
-                prepare: { await barrier.wait() },
-                commit: { probe.record("commit") })
-        }
 
-        await barrier.waitUntilEntered()
-        await runtime.setPaused(true)
-        await barrier.release()
+        let started = TalkRecognitionCaptureLifecycle.start(
+            isCurrent: { true },
+            prepare: { enableVoiceProcessing -> RuntimeRecognitionCapture in
+                let kind = enableVoiceProcessing ? "processed" : "raw"
+                probe.record("prepare-\(kind)")
+                probe.record("cleanup-\(kind)")
+                throw RuntimeRecognitionStartError.failed
+            },
+            discard: { probe.record("discard-\($0.name)") },
+            publish: { probe.record("publish-\($0.name)") },
+            onFailure: { enableVoiceProcessing, _ in
+                probe.record(enableVoiceProcessing ? "failed-processed" : "failed-raw")
+            })
 
-        #expect(await attempt.value == false)
-        #expect(probe.values().isEmpty)
-
-        await runtime.setEnabled(false)
+        #expect(!started)
+        #expect(probe.values() == [
+            "prepare-processed",
+            "cleanup-processed",
+            "failed-processed",
+            "prepare-raw",
+            "cleanup-raw",
+            "failed-raw",
+        ])
     }
 
     @Test @MainActor func `stale relay cleanup cannot clear a newer owned session`() async {
@@ -415,30 +443,43 @@ struct TalkModeRuntimeSpeechTests {
         sessionB.stop()
     }
 
-    @Test @MainActor func `stale recognition attempt cannot commit after a newer attempt`() async {
-        let runtime = TalkModeRuntime()
-        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
-        let barrier = RuntimeContinuationBarrier()
+    @Test func `cancelled recognition attempt discards capture before publication`() {
         let probe = RuntimeCommitProbe()
-        let attemptA = Task {
-            await runtime._test_startRecognitionAttempt(
-                lifecycleGeneration: lifecycleGeneration,
-                prepare: { await barrier.wait() },
-                commit: { probe.record("A") })
-        }
+        var isCurrent = true
 
-        await barrier.waitUntilEntered()
-        let attemptB = await runtime._test_startRecognitionAttempt(
-            lifecycleGeneration: lifecycleGeneration,
-            prepare: {},
-            commit: { probe.record("B") })
-        await barrier.release()
+        let started = TalkRecognitionCaptureLifecycle.start(
+            isCurrent: { isCurrent },
+            prepare: { _ in
+                isCurrent = false
+                return RuntimeRecognitionCapture("processed")
+            },
+            discard: { probe.record("discard-\($0.name)") },
+            publish: { probe.record("publish-\($0.name)") },
+            onFailure: { _, _ in probe.record("failed") })
 
-        #expect(attemptB)
-        #expect(await attemptA.value == false)
-        #expect(probe.values() == ["B"])
+        #expect(!started)
+        #expect(probe.values() == ["discard-processed"])
+    }
 
-        await runtime.setEnabled(false)
+    @Test func `stale recognition cleanup cannot clear newer ownership`() {
+        let engineA = NSObject()
+        let engineB = NSObject()
+
+        #expect(!TalkRecognitionCaptureLifecycle.ownsResources(
+            currentAttempt: 2,
+            expectedAttempt: 1,
+            currentEngineIdentifier: ObjectIdentifier(engineB),
+            expectedEngineIdentifier: ObjectIdentifier(engineA)))
+        #expect(!TalkRecognitionCaptureLifecycle.ownsResources(
+            currentAttempt: 2,
+            expectedAttempt: 2,
+            currentEngineIdentifier: ObjectIdentifier(engineB),
+            expectedEngineIdentifier: ObjectIdentifier(engineA)))
+        #expect(TalkRecognitionCaptureLifecycle.ownsResources(
+            currentAttempt: 2,
+            expectedAttempt: 2,
+            currentEngineIdentifier: ObjectIdentifier(engineB),
+            expectedEngineIdentifier: ObjectIdentifier(engineB)))
     }
 
     @Test func `talk speak params carry resolved voice and directive overrides`() {

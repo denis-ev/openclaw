@@ -109,10 +109,6 @@ actor TalkModeRuntime {
     private let minSpeechRMS: Double = 1e-3
     private let speechBoostFactor: Double = 6.0
 
-    static func configureRecognitionRequest(_ request: SFSpeechAudioBufferRecognitionRequest) {
-        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
-    }
-
     // MARK: - Lifecycle
 
     func setEnabled(_ enabled: Bool) async {
@@ -390,9 +386,6 @@ actor TalkModeRuntime {
         }
         self.logger.debug("talk recognizer locale=\(recognizer.locale.identifier, privacy: .public)")
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        Self.configureRecognitionRequest(request)
-
         let selection = AudioInputDeviceObserver.resolveSelection(selectedInputUID)
         // Preparation above crosses MainActor. Hardware can become owned/running only
         // after this lifecycle and recognition attempt are revalidated together.
@@ -407,56 +400,49 @@ actor TalkModeRuntime {
             return false
         }
 
-        let preparedAudio: (engine: AVAudioEngine, activeInputResolution: AudioInputDeviceResolution)
-        do {
-            preparedAudio = try self.prepareAudioEngine(
-                selection: selection,
-                request: request,
-                enableVoiceProcessing: true)
-        } catch {
-            self.logger.warning(
-                "talk processed input setup failed; retrying without voice processing: " +
-                    "\(error.localizedDescription, privacy: .public)")
-            do {
-                preparedAudio = try self.prepareAudioEngine(
+        let started = TalkRecognitionCaptureLifecycle.start(
+            isCurrent: {
+                self.canCommitRecognitionStart(
+                    lifecycleGeneration: lifecycleGeneration,
+                    recognitionAttempt: recognitionAttempt)
+            },
+            prepare: { enableVoiceProcessing in
+                try self.prepareStartedRecognitionCapture(
                     selection: selection,
-                    request: request,
-                    enableVoiceProcessing: false)
-            } catch {
-                self.logger.error(
-                    "talk audio engine start failed: \(error.localizedDescription, privacy: .public)")
-                return false
-            }
-        }
-
-        self.recognizer = recognizer
-        self.recognitionRequest = request
-        self.audioEngine = preparedAudio.engine
-        self.activeInputResolution = preparedAudio.activeInputResolution
-        do {
-            try preparedAudio.engine.start()
-        } catch {
-            self.discardRecognitionResources(
-                recognitionAttempt: recognitionAttempt,
-                audioEngine: preparedAudio.engine)
-            self.logger.error(
-                "talk audio engine start failed: \(error.localizedDescription, privacy: .public)")
-            return false
-        }
-        self.recognitionTask = recognizer.recognitionTask(
-            with: request,
-            resultHandler: { [weak self, recognitionAttempt] result, error in
-                guard let self else { return }
-                let segments = result?.bestTranscription.segments ?? []
-                let transcript = result?.bestTranscription.formattedString
-                let update = RecognitionUpdate(
-                    transcript: transcript,
-                    hasConfidence: segments.contains { $0.confidence > 0.6 },
-                    isFinal: result?.isFinal ?? false,
-                    errorDescription: error?.localizedDescription,
-                    generation: recognitionAttempt)
-                Task { await self.handleRecognition(update) }
+                    enableVoiceProcessing: enableVoiceProcessing)
+            },
+            discard: { $0.discard() },
+            publish: { preparedCapture in
+                self.recognizer = recognizer
+                self.recognitionRequest = preparedCapture.request
+                self.audioEngine = preparedCapture.engine
+                self.activeInputResolution = preparedCapture.activeInputResolution
+                self.recognitionTask = recognizer.recognitionTask(
+                    with: preparedCapture.request,
+                    resultHandler: { [weak self, recognitionAttempt] result, error in
+                        guard let self else { return }
+                        let segments = result?.bestTranscription.segments ?? []
+                        let transcript = result?.bestTranscription.formattedString
+                        let update = RecognitionUpdate(
+                            transcript: transcript,
+                            hasConfidence: segments.contains { $0.confidence > 0.6 },
+                            isFinal: result?.isFinal ?? false,
+                            errorDescription: error?.localizedDescription,
+                            generation: recognitionAttempt)
+                        Task { await self.handleRecognition(update) }
+                    })
+            },
+            onFailure: { enableVoiceProcessing, error in
+                if enableVoiceProcessing {
+                    self.logger.warning(
+                        "talk processed input start failed; retrying without voice processing: " +
+                            "\(error.localizedDescription, privacy: .public)")
+                } else {
+                    self.logger.error(
+                        "talk audio engine start failed: \(error.localizedDescription, privacy: .public)")
+                }
             })
+        guard started else { return false }
         self.startRMSTicker(meter: self.rmsMeter)
         return true
     }
@@ -474,8 +460,12 @@ actor TalkModeRuntime {
         recognitionAttempt: Int? = nil,
         audioEngine expectedAudioEngine: AVAudioEngine? = nil)
     {
-        if let recognitionAttempt, self.recognitionGeneration != recognitionAttempt { return }
-        if let expectedAudioEngine, self.audioEngine !== expectedAudioEngine { return }
+        guard TalkRecognitionCaptureLifecycle.ownsResources(
+            currentAttempt: self.recognitionGeneration,
+            expectedAttempt: recognitionAttempt,
+            currentEngineIdentifier: self.audioEngine.map(ObjectIdentifier.init),
+            expectedEngineIdentifier: expectedAudioEngine.map(ObjectIdentifier.init))
+        else { return }
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
         self.recognitionRequest?.endAudio()
@@ -620,41 +610,55 @@ actor TalkModeRuntime {
         return selection
     }
 
-    private func prepareAudioEngine(
+    private func prepareStartedRecognitionCapture(
         selection: AudioInputDeviceResolution,
-        request: SFSpeechAudioBufferRecognitionRequest,
         enableVoiceProcessing: Bool)
-        throws -> (engine: AVAudioEngine, activeInputResolution: AudioInputDeviceResolution)
+        throws -> PreparedRecognitionCapture
     {
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        TalkRecognitionCaptureLifecycle.configure(request)
         let audioEngine = AVAudioEngine()
         let input = audioEngine.inputNode
-        if enableVoiceProcessing {
-            do {
+        var tapInstalled = false
+        do {
+            if enableVoiceProcessing {
                 try input.setVoiceProcessingEnabled(true)
-            } catch {
-                // Aggregate devices can reject voice processing; capture still works without it.
-                self.logger.warning(
-                    "talk voice processing unavailable: \(error.localizedDescription, privacy: .public)")
             }
-        }
 
-        let activeResolution = self.bindSelectedInputIfNeeded(selection, to: input)
-        guard activeResolution.resolvedUID != nil else {
-            throw TalkAudioInputError.unavailable
-        }
+            let activeResolution = self.bindSelectedInputIfNeeded(selection, to: input)
+            guard activeResolution.resolvedUID != nil else {
+                throw TalkAudioInputError.unavailable
+            }
 
-        let format = input.outputFormat(forBus: 0)
-        guard format.channelCount > 0, format.sampleRate > 0 else {
-            throw TalkAudioInputError.invalidFormat
+            let format = input.outputFormat(forBus: 0)
+            guard format.channelCount > 0, format.sampleRate > 0 else {
+                throw TalkAudioInputError.invalidFormat
+            }
+            input.removeTap(onBus: 0)
+            let meter = self.rmsMeter
+            input.installTap(
+                onBus: 0,
+                bufferSize: 2048,
+                format: format)
+            { [weak request, meter] buffer, _ in
+                request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
+                meter.set(TalkAudioLevel.rms(buffer: buffer))
+            }
+            tapInstalled = true
+            audioEngine.prepare()
+            try audioEngine.start()
+            return PreparedRecognitionCapture(
+                request: request,
+                engine: audioEngine,
+                activeInputResolution: activeResolution)
+        } catch {
+            request.endAudio()
+            if tapInstalled {
+                input.removeTap(onBus: 0)
+            }
+            audioEngine.stop()
+            throw error
         }
-        input.removeTap(onBus: 0)
-        let meter = self.rmsMeter
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request, meter] buffer, _ in
-            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-            meter.set(TalkAudioLevel.rms(buffer: buffer))
-        }
-        audioEngine.prepare()
-        return (audioEngine, activeResolution)
     }
 
     private func defaultFallback(for selection: AudioInputDeviceResolution) -> AudioInputDeviceResolution {
@@ -662,18 +666,6 @@ actor TalkModeRuntime {
             selectedUID: selection.selectedUID,
             resolvedUID: AudioInputDeviceObserver.resolveSelection(nil).resolvedUID,
             fellBackToSystemDefault: selection.selectedUID != nil)
-    }
-}
-
-private enum TalkAudioInputError: LocalizedError {
-    case unavailable
-    case invalidFormat
-
-    var errorDescription: String? {
-        switch self {
-        case .unavailable: "Selected input and system default are unavailable"
-        case .invalidFormat: "Selected audio input has no usable format"
-        }
     }
 }
 

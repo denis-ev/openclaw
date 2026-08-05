@@ -421,22 +421,6 @@ extension TalkModeRuntime {
         return self.lifecycleGeneration
     }
 
-    func _test_startRecognitionAttempt(
-        lifecycleGeneration: Int,
-        prepare: @escaping @Sendable () async -> Void,
-        commit: @escaping @Sendable () -> Void) async -> Bool
-    {
-        self.recognitionGeneration &+= 1
-        let recognitionAttempt = self.recognitionGeneration
-        self.discardRecognitionResources()
-        await prepare()
-        guard self.canCommitRecognitionStart(
-            lifecycleGeneration: lifecycleGeneration,
-            recognitionAttempt: recognitionAttempt) else { return false }
-        commit()
-        return true
-    }
-
     func _test_startRealtimeRelay(
         lifecycleGeneration: Int,
         makeSession: @escaping @Sendable () async -> RealtimeTalkRelaySession,
