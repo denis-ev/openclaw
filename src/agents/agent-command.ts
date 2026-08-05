@@ -145,7 +145,8 @@ async function agentCommandInternal(
     manifestMetadataSnapshot,
     modelManifestContext,
   } = prepared;
-  let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
+  let { attribution: executionAttribution, lifecycleGeneration } =
+    executionIdentity.resolveAttribution(opts, prepared);
   let sessionEntry = prepared.sessionEntry,
     runOwnedSessionId = sessionId;
   const sessionStateActor = classifySessionStateActor({
@@ -232,7 +233,7 @@ async function agentCommandInternal(
     });
     return await sessionWorkAdmission.run(async () => {
       executionIdentity.record({
-        attribution: opts.executionAttribution,
+        attribution: executionAttribution,
         agentId: sessionAgentId,
         cfg,
         ingress: admissionIngress,
@@ -423,6 +424,7 @@ async function agentCommandInternal(
           workspaceDir,
           runId,
           lifecycleGeneration,
+          attribution: executionAttribution,
           acpManager,
           acpResolution,
           trackInternalModelRunTarget,
@@ -489,11 +491,12 @@ async function agentCommandInternal(
       sessionEntry = modelSelection.sessionEntry;
       const embeddedAttempt = await runEmbeddedAgentAttempt({
         prepared,
-        opts,
+        opts: executionIdentity.replaceAttribution(opts, executionAttribution),
         sessionEntry,
         lifecycleGeneration,
-        onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
+        onLifecycleGenerationChanged: (nextLifecycleGeneration, nextAttribution) => {
           lifecycleGeneration = nextLifecycleGeneration;
+          executionAttribution = nextAttribution ?? executionAttribution;
         },
         suppressVisibleSessionEffects,
         preserveUserFacingSessionModelState,
@@ -664,20 +667,20 @@ async function agentCommandFromIngressInternal(
   recovery?: {
     restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   },
+  trustedAttribution = false,
 ) {
-  if (typeof opts.allowModelOverride !== "boolean") {
-    throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
-  }
-  const lifecycleGeneration =
-    opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
+  const { lifecycleGeneration, opts: internalOpts } = executionIdentity.prepareIngress(
+    opts,
+    trustedAttribution,
+  );
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
     const result = await runWithAgentCommandRecoveryOwner({
       lifecycleGeneration,
       mode: "claim",
       opts: {
-        ...opts,
+        ...internalOpts,
         lifecycleGeneration,
-        senderIsOwner: opts.senderIsOwner === true,
+        senderIsOwner: internalOpts.senderIsOwner === true,
       },
       prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
       restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
@@ -692,7 +695,7 @@ async function agentCommandFromIngressInternal(
     });
 
     if (result) {
-      emitIngressModelUsageDiagnostic(result, opts);
+      emitIngressModelUsageDiagnostic(result, internalOpts);
     }
 
     return result;
@@ -707,11 +710,7 @@ export async function agentCommandFromIngress(
 ) {
   // Plugin SDK callers may be plain JavaScript. Enforce the private execution
   // boundary at runtime so extra or inherited properties cannot author audit identity.
-  return await agentCommandFromIngressInternal(
-    { ...opts, executionAttribution: undefined },
-    runtime,
-    deps,
-  );
+  return await agentCommandFromIngressInternal(opts, runtime, deps);
 }
 
 /** Internal Gateway entrypoint that restores a rejected restart-recovery admission. */
@@ -723,7 +722,7 @@ export async function agentCommandFromGatewayIngress(
     restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   },
 ) {
-  return await agentCommandFromIngressInternal(opts, runtime, deps, recovery);
+  return await agentCommandFromIngressInternal(opts, runtime, deps, recovery, true);
 }
 
 export const testing = {
