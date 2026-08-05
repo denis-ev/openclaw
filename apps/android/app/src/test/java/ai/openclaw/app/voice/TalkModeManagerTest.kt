@@ -507,31 +507,36 @@ class TalkModeManagerTest {
 
     val staleCompletion = CompletableDeferred<Unit>()
     synchronized(capturePauseLock) {
-      setPrivateField(manager, "pendingRealtimeOutputClear", PendingRealtimeOutputClear(1, staleCompletion))
+      setPrivateField(manager, "pendingRealtimeOutputClear", PendingRealtimeOutputClear(1, 1, staleCompletion))
     }
     manager.realtimeEvent(realtimeAudioPayload(turnId = "turn-2", outputGeneration = 2))
     manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"gen-2"}""")
-    val replacementQueue = readPrivateField(manager, "realtimeAudioQueue")
 
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear","outputGeneration":2}""")
+
+    assertFalse(staleCompletion.isCompleted)
+    assertNull(readPrivateField(manager, "realtimeAudioQueue"))
+    assertNull(readPrivateField(manager, "realtimePlaybackIdentity"))
+    assertTrue((readPrivateField(manager, "pendingRealtimePlaybackMarks") as Map<*, *>).isEmpty())
+
+    manager.realtimeEvent(realtimeAudioPayload(turnId = "turn-2", outputGeneration = 2))
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"gen-2-replacement"}""")
+    val replacementQueue = readPrivateField(manager, "realtimeAudioQueue")
     manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear","outputGeneration":1}""")
 
     assertTrue(staleCompletion.isCompleted)
     assertTrue(replacementQueue === readPrivateField(manager, "realtimeAudioQueue"))
-    assertEquals(2L, readPrivateField(manager, "realtimePlaybackGeneration"))
+    assertEquals(3L, readPrivateField(manager, "realtimePlaybackGeneration"))
     assertEquals(
       RealtimeOutputIdentity(turnId = "turn-2", outputGeneration = 2L),
       readPrivateField(manager, "realtimePlaybackIdentity"),
     )
-    assertTrue((readPrivateField(manager, "pendingRealtimePlaybackMarks") as Map<*, *>).containsKey("gen-2"))
-
-    val matchingCompletion = CompletableDeferred<Unit>()
-    synchronized(capturePauseLock) {
-      setPrivateField(manager, "pendingRealtimeOutputClear", PendingRealtimeOutputClear(2, matchingCompletion))
-    }
+    assertTrue(
+      (readPrivateField(manager, "pendingRealtimePlaybackMarks") as Map<*, *>).containsKey("gen-2-replacement"),
+    )
 
     manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear","outputGeneration":2}""")
 
-    assertTrue(matchingCompletion.isCompleted)
     assertNull(readPrivateField(manager, "realtimeAudioQueue"))
     assertNull(readPrivateField(manager, "realtimePlaybackIdentity"))
     assertTrue((readPrivateField(manager, "pendingRealtimePlaybackMarks") as Map<*, *>).isEmpty())
