@@ -1045,7 +1045,6 @@ async function buildResponsesPayload(
     if (!hasCompletedToolOutput && hasDeclaredTool(body, "exec")) {
       return buildToolCallEventsWithArgs("exec", {
         language: "javascript",
-        restartSafe: true,
         code: [
           'const matches = await tools.search("qa_restart_wait");',
           "await tools.call(matches[0].id, {});",
