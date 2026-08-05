@@ -82,6 +82,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     formatErrorMessage: fn,
     liveTurnTimeoutMs: fn,
     resolveQaLiveTurnTimeoutMs: fn,
+    normalizeModelRef: fn,
     splitModelRef: fn,
     hasDiscoveryLabels: fn,
     reportsDiscoveryScopeLeak: fn,
@@ -188,6 +189,7 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
     expect(api.waitForQaChannelReady).toBe(api.waitForTransportReady);
+    expect(api.normalizeModelRef).toBe(deps.normalizeModelRef);
     expect(api.waitForAgentHistoryReply).toBe(deps.waitForAgentHistoryReply);
     expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
     expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);

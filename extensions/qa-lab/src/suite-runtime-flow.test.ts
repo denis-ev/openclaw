@@ -1,4 +1,5 @@
 // Qa Lab tests cover suite runtime flow plugin behavior.
+import { parseModelRef, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import { describe, expect, it, vi } from "vitest";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
@@ -227,7 +228,15 @@ describe("qa suite runtime flow", () => {
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "openai/gpt-5.6-luna-mini",
       mock: null,
-      cfg: {} as QaSuiteRuntimeEnv["cfg"],
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-5": { alias: "opus" },
+            },
+          },
+        },
+      },
     } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
     const scenario = {
       id: "session-memory-ranking",
@@ -243,7 +252,7 @@ describe("qa suite runtime flow", () => {
       },
     };
     const runScenario = vi.fn();
-    const splitModelRef = vi.fn();
+    const splitModelRef = vi.fn((raw: string) => parseModelRef(raw, "openai"));
     const formatErrorMessage = vi.fn();
     const liveTurnTimeoutMs = vi.fn();
     const resolveQaLiveTurnTimeoutMs = vi.fn();
@@ -272,6 +281,7 @@ describe("qa suite runtime flow", () => {
       deps: {
         runScenario: typeof runScenario;
         waitForTransportReady: typeof waitForTransportReady;
+        normalizeModelRef: (raw: string) => { provider: string; model: string } | null;
         waitForOutboundMessage: typeof waitForOutboundMessage;
         markGatewayLogCursor: () => number;
         assertNoGatewayLogSentinels: typeof assertNoGatewayLogSentinels;
@@ -297,6 +307,19 @@ describe("qa suite runtime flow", () => {
     expect(call.scenario).toBe(scenario);
     expect(call.deps.runScenario).toBe(runScenario);
     expect(call.deps.waitForTransportReady).toBe(waitForTransportReady);
+    const canonicalOpus = resolveModelRefFromString({
+      cfg: env.cfg,
+      raw: "anthropic/opus",
+      defaultProvider: "anthropic",
+    })?.ref;
+    expect(canonicalOpus).toEqual({ provider: "anthropic", model: "claude-opus-5" });
+    expect(call.deps.normalizeModelRef("anthropic/opus")).toEqual(canonicalOpus);
+    expect(call.deps.normalizeModelRef("AnThRoPiC/OPUS")).toEqual(canonicalOpus);
+    expect(call.deps.normalizeModelRef("OPENAI/gpt-5.6-luna")).toEqual({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    });
+    expect(call.deps.normalizeModelRef("")).toBeNull();
     expect(call.deps.waitForOutboundMessage).toBeTypeOf("function");
     const outboundPredicate = vi.fn();
     call.deps.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);
