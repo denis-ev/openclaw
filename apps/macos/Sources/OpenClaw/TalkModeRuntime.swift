@@ -22,6 +22,10 @@ actor TalkModeRuntime {
         case fallback
     }
 
+    typealias StartDependencies = (
+        realtime: @Sendable (Int) async throws -> Void,
+        fallback: @Sendable (Int) async -> Void)
+
     let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
@@ -96,6 +100,7 @@ actor TalkModeRuntime {
     private var pendingRealtimeRelayStartLifecycleGeneration: Int?
     var realtimeRestartGeneration: UInt64 = 0
     var realtimeRestartTask: Task<Void, Never>?
+    var startDependencies: StartDependencies?
     private var speechLocaleID: String?
     private var lastInterruptedAtSeconds: Double?
     private var voiceAliases: [String: String] = [:]
@@ -229,11 +234,14 @@ actor TalkModeRuntime {
         let gen = self.lifecycleGeneration
         guard voiceWakeSupported else { return }
 
-        guard await PermissionManager.ensureVoiceWakePermissions(interactive: true) else {
-            self.logger.error("talk runtime not starting: permissions missing")
-            return
+        let startDependencies = self.startDependencies
+        if startDependencies == nil {
+            guard await PermissionManager.ensureVoiceWakePermissions(interactive: true) else {
+                self.logger.error("talk runtime not starting: permissions missing")
+                return
+            }
+            await reloadConfig()
         }
-        await reloadConfig()
         guard self.isCurrent(gen) else { return }
         if self.isPaused {
             self.phase = .idle
@@ -247,7 +255,11 @@ actor TalkModeRuntime {
         self.bypassRealtimeOnNextStart = false
         if self.shouldAttemptRealtimeRelay(), !bypassRealtime {
             do {
-                try await self.startRealtimeRelay(generation: gen)
+                if let startDependencies {
+                    try await startDependencies.realtime(gen)
+                } else {
+                    try await self.startRealtimeRelay(generation: gen)
+                }
                 return
             } catch is CancellationError {
                 if self.consumePendingRealtimeRelayStart() {
@@ -265,7 +277,11 @@ actor TalkModeRuntime {
                 }
             }
         }
-        await self.startNativeFallback(generation: gen)
+        if let startDependencies {
+            await startDependencies.fallback(gen)
+        } else {
+            await self.startNativeFallback(generation: gen)
+        }
     }
 
     private func stop() async {
@@ -303,6 +319,13 @@ actor TalkModeRuntime {
     #if DEBUG
     func _test_enableRealtimeRelaySelection() {
         (self.macOSRealtimeRelayOptIn, self.hasGatewayRealtimeRelayTuple) = (true, true)
+    }
+
+    func _test_setStartDependencies(
+        startRealtimeRelay: @escaping @Sendable (Int) async throws -> Void,
+        startNativeFallback: @escaping @Sendable (Int) async -> Void)
+    {
+        self.startDependencies = (startRealtimeRelay, startNativeFallback)
     }
     #endif
 

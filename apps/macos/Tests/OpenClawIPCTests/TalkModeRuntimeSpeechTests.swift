@@ -91,6 +91,23 @@ private enum RuntimeRecognitionStartError: Error {
     case failed
 }
 
+private enum RuntimeRelayStartError: Error {
+    case failed
+}
+
+private actor RuntimeAttemptCounter {
+    private var count = 0
+
+    func next() -> Int {
+        self.count += 1
+        return self.count
+    }
+
+    func value() -> Int {
+        self.count
+    }
+}
+
 enum RuntimeRelayStartupPauseOutcome: Equatable {
     case resume
     case remainPaused
@@ -228,6 +245,23 @@ struct TalkModeRuntimeSpeechTests {
 
         let realtimeSessionIsActive = await runtime._test_realtimeSessionIsActive()
         #expect(!realtimeSessionIsActive)
+        #expect(await runtime._test_rapidRealtimeRestartCount() == 1)
+        #expect(await runtime._test_hasPendingRealtimeRestart())
+
+        await runtime._test_cancelRealtimeRecovery()
+        session.stop()
+    }
+
+    @Test @MainActor func `output cancellation failure schedules bounded recovery`() async {
+        let runtime = TalkModeRuntime()
+        let session = makeRuntimeTestRealtimeSession(player: RuntimeTestPCMPlayer())
+        let relayGeneration = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+
+        await runtime._test_handleRealtimeTermination(
+            .outputCancellationFailed,
+            relayGeneration: relayGeneration)
+
+        #expect(await runtime._test_realtimeSessionIsActive() == false)
         #expect(await runtime._test_rapidRealtimeRestartCount() == 1)
         #expect(await runtime._test_hasPendingRealtimeRestart())
 
@@ -528,6 +562,69 @@ struct TalkModeRuntimeSpeechTests {
 
         await runtime._test_cancelRealtimeRecovery()
         sessionB.stop()
+    }
+
+    @Test @MainActor func `stale relay start failure resumes with successor without native fallback`() async {
+        let runtime = TalkModeRuntime()
+        _ = await runtime._test_prepareEnabledLifecycle()
+        await runtime._test_enableRealtimeRelaySelection()
+        let barrier = RuntimeContinuationBarrier()
+        let counter = RuntimeAttemptCounter()
+        let fallbackProbe = RuntimeCommitProbe()
+        let playerA = RuntimeTestPCMPlayer()
+        let playerB = RuntimeTestPCMPlayer()
+        let sessionA = makeRuntimeTestRealtimeSession(player: playerA)
+        let sessionB = makeRuntimeTestRealtimeSession(player: playerB)
+        await runtime._test_setStartDependencies(
+            startRealtimeRelay: { lifecycleGeneration in
+                if await counter.next() == 1 {
+                    try await runtime._test_startRealtimeRelay(
+                        lifecycleGeneration: lifecycleGeneration,
+                        makeSession: { sessionA },
+                        start: { _ in
+                            await barrier.wait()
+                            throw RuntimeRelayStartError.failed
+                        })
+                } else {
+                    try await runtime._test_startRealtimeRelay(
+                        lifecycleGeneration: lifecycleGeneration,
+                        makeSession: { sessionB },
+                        start: { _ in })
+                }
+            },
+            startNativeFallback: { _ in fallbackProbe.record("native") })
+
+        let start = Task { await runtime.start() }
+        await barrier.waitUntilEntered()
+        await runtime.setPaused(true)
+        await runtime.setPaused(false)
+        await barrier.release()
+        await start.value
+
+        #expect(await counter.value() == 2)
+        #expect(await runtime._test_realtimeSessionIs(sessionB))
+        #expect(playerA.stopCount == 1)
+        #expect(playerB.stopCount == 0)
+        #expect(fallbackProbe.values().isEmpty)
+
+        await runtime.setEnabled(false)
+    }
+
+    @Test @MainActor func `current relay start failure selects native fallback`() async {
+        let runtime = TalkModeRuntime()
+        _ = await runtime._test_prepareEnabledLifecycle()
+        await runtime._test_enableRealtimeRelaySelection()
+        let fallbackProbe = RuntimeCommitProbe()
+        await runtime._test_setStartDependencies(
+            startRealtimeRelay: { _ in throw RuntimeRelayStartError.failed },
+            startNativeFallback: { _ in fallbackProbe.record("native") })
+
+        await runtime.start()
+
+        #expect(fallbackProbe.values() == ["native"])
+        #expect(await runtime._test_realtimeSessionIsActive() == false)
+
+        await runtime.setEnabled(false)
     }
 
     @Test func `cancelled recognition attempt discards capture before publication`() {

@@ -154,6 +154,12 @@ extension TalkModeRuntime {
             if self.realtimeSession === session {
                 self.realtimeSession = nil
             }
+            guard self.isCurrent(lifecycleGeneration), !self.isPaused,
+                  self.realtimeRelayGeneration == relayGeneration,
+                  self.realtimeRelayStartGeneration == relayGeneration
+            else {
+                throw CancellationError()
+            }
             throw error
         }
         guard self.isCurrent(lifecycleGeneration), !self.isPaused,
