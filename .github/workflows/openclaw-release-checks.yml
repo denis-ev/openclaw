@@ -797,6 +797,20 @@ jobs:
       OPENCLAW_DISCORD_SMOKE_GUILD_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_GUILD_ID }}
       OPENCLAW_DISCORD_SMOKE_CHANNEL_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID }}
 
+  windows_node_release_candidate_e2e:
+    name: Run Windows node release-candidate E2E
+    needs: [resolve_target, prepare_release_package]
+    if: needs.resolve_target.outputs.rerun_group == 'all'
+    permissions:
+      actions: read
+      contents: read
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@c5981c25fea79eb175ec6d7c9bd2d6ebf30e5d6d
+    with:
+      candidate_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
+      candidate_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
+      candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
+      windows_node_sha: c5981c25fea79eb175ec6d7c9bd2d6ebf30e5d6d
+
   live_repo_e2e_release_checks:
     name: Run repo/live E2E validation
     needs: [resolve_target]
@@ -2197,6 +2211,7 @@ jobs:
       - prepare_release_package
       - install_smoke_release_checks
       - cross_os_release_checks
+      - windows_node_release_candidate_e2e
       - live_repo_e2e_release_checks
       - docker_e2e_release_checks
       - package_acceptance_release_checks
@@ -2321,6 +2336,7 @@ jobs:
           PREPARE_RELEASE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
           INSTALL_SMOKE_RELEASE_CHECKS_RESULT: ${{ needs.install_smoke_release_checks.result }}
           CROSS_OS_RELEASE_CHECKS_RESULT: ${{ needs.cross_os_release_checks.result }}
+          WINDOWS_NODE_RELEASE_CANDIDATE_E2E_RESULT: ${{ needs.windows_node_release_candidate_e2e.result }}
           LIVE_REPO_E2E_RELEASE_CHECKS_RESULT: ${{ needs.live_repo_e2e_release_checks.result }}
           DOCKER_E2E_RELEASE_CHECKS_RESULT: ${{ needs.docker_e2e_release_checks.result }}
           PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT: ${{ needs.package_acceptance_release_checks.result }}
@@ -2348,6 +2364,7 @@ jobs:
             "prepare_release_package=${PREPARE_RELEASE_PACKAGE_RESULT}"
             "install_smoke_release_checks=${INSTALL_SMOKE_RELEASE_CHECKS_RESULT}"
             "cross_os_release_checks=${CROSS_OS_RELEASE_CHECKS_RESULT}"
+            "windows_node_release_candidate_e2e=${WINDOWS_NODE_RELEASE_CANDIDATE_E2E_RESULT:-skipped}"
             "live_repo_e2e_release_checks=${LIVE_REPO_E2E_RELEASE_CHECKS_RESULT}"
             "docker_e2e_release_checks=${DOCKER_E2E_RELEASE_CHECKS_RESULT}"
             "package_acceptance_release_checks=${PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT}"
