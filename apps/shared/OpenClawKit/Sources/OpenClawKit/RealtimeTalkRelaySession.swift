@@ -1132,8 +1132,9 @@ public final class RealtimeTalkRelaySession {
                 do {
                     _ = try await transport.request("talk.session.acknowledgeMark", payload, 8000)
                 } catch {
+                    let message = Self.safeLogMessage(error.localizedDescription)
                     logger.warning(
-                        "talk realtime: mark acknowledgement failed=\(Self.safeLogMessage(error.localizedDescription), privacy: .public)")
+                        "talk realtime: mark acknowledgement failed=\(message, privacy: .public)")
                 }
             }
         }
@@ -1314,7 +1315,11 @@ extension RealtimeTalkRelaySession {
         self.lastSuppressedEchoLogAtMs = timestampMs
         let maxRms = String(format: "%.4f", Double(self.suppressedEchoMaxRms))
         self.logger.debug(
-            "talk realtime mic suppressed during output: buffers=\(self.suppressedEchoFrameCount) bytes=\(self.suppressedEchoByteCount) maxRms=\(maxRms)")
+            """
+            talk realtime mic suppressed during output: \
+            buffers=\(self.suppressedEchoFrameCount) \
+            bytes=\(self.suppressedEchoByteCount) maxRms=\(maxRms)
+            """)
         self.suppressedEchoFrameCount = 0
         self.suppressedEchoByteCount = 0
         self.suppressedEchoMaxRms = 0
