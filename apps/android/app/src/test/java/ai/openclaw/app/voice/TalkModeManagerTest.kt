@@ -47,6 +47,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -468,28 +470,71 @@ class TalkModeManagerTest {
   }
 
   @Test
-  fun staleRealtimeClearDoesNotStopReplacementPlayback() {
-    val manager = createManager()
+  fun realtimeAdmissionAndClearAreGenerationOwned() {
+    val manager = createManager(realtimePlaybackDispatcher = StandardTestDispatcher())
     setPrivateField(manager, "realtimeSessionId", "relay-1")
-    setPrivateField(
-      manager,
-      "realtimePlaybackIdentity",
-      RealtimeOutputIdentity(turnId = "turn-2", outputGeneration = 2L),
-    )
-    setMutableStateFlow(manager, "_isSpeaking", true)
+    val capturePauseLock = readPrivateField(manager, "realtimeCapturePauseLock")!!
+    val workerStarted = CountDownLatch(1)
+    val workerFinished = CountDownLatch(1)
+    val staleWorker =
+      Thread {
+        workerStarted.countDown()
+        manager.realtimeEvent(realtimeAudioPayload(turnId = "turn-1", outputGeneration = 1))
+        workerFinished.countDown()
+      }
+
+    synchronized(capturePauseLock) {
+      staleWorker.start()
+      assertTrue(workerStarted.await(5, TimeUnit.SECONDS))
+      val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+      while (staleWorker.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+        Thread.yield()
+      }
+      assertEquals(Thread.State.BLOCKED, staleWorker.state)
+      setPrivateField(manager, "realtimeOutputSuppressed", true)
+    }
+
+    assertTrue(workerFinished.await(5, TimeUnit.SECONDS))
+    assertNull(readPrivateField(manager, "realtimeAudioQueue"))
+    assertNull(readPrivateField(manager, "realtimePlaybackIdentity"))
+    assertEquals(0L, readPrivateField(manager, "realtimePlaybackGeneration"))
+
+    synchronized(capturePauseLock) {
+      setPrivateField(manager, "realtimeOutputSuppressed", false)
+    }
+    manager.realtimeEvent(realtimeAudioPayload(turnId = "turn-1", outputGeneration = 1))
+    assertTrue(stopRealtimePlayback(manager, expectedGeneration = 1))
+
+    val staleCompletion = CompletableDeferred<Unit>()
+    synchronized(capturePauseLock) {
+      setPrivateField(manager, "pendingRealtimeOutputClear", PendingRealtimeOutputClear(1, staleCompletion))
+    }
+    manager.realtimeEvent(realtimeAudioPayload(turnId = "turn-2", outputGeneration = 2))
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"gen-2"}""")
+    val replacementQueue = readPrivateField(manager, "realtimeAudioQueue")
 
     manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear","outputGeneration":1}""")
 
-    assertTrue(manager.isSpeaking.value)
+    assertTrue(staleCompletion.isCompleted)
+    assertTrue(replacementQueue === readPrivateField(manager, "realtimeAudioQueue"))
+    assertEquals(2L, readPrivateField(manager, "realtimePlaybackGeneration"))
     assertEquals(
       RealtimeOutputIdentity(turnId = "turn-2", outputGeneration = 2L),
       readPrivateField(manager, "realtimePlaybackIdentity"),
     )
+    assertTrue((readPrivateField(manager, "pendingRealtimePlaybackMarks") as Map<*, *>).containsKey("gen-2"))
+
+    val matchingCompletion = CompletableDeferred<Unit>()
+    synchronized(capturePauseLock) {
+      setPrivateField(manager, "pendingRealtimeOutputClear", PendingRealtimeOutputClear(2, matchingCompletion))
+    }
 
     manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear","outputGeneration":2}""")
 
-    assertFalse(manager.isSpeaking.value)
+    assertTrue(matchingCompletion.isCompleted)
+    assertNull(readPrivateField(manager, "realtimeAudioQueue"))
     assertNull(readPrivateField(manager, "realtimePlaybackIdentity"))
+    assertTrue((readPrivateField(manager, "pendingRealtimePlaybackMarks") as Map<*, *>).isEmpty())
   }
 
   @Test
@@ -1168,6 +1213,11 @@ class TalkModeManagerTest {
 
   private fun TalkModeManager.realtimeEvent(payload: String) = handleGatewayEvent("talk.event", payload)
 
+  private fun realtimeAudioPayload(
+    turnId: String,
+    outputGeneration: Long,
+  ): String = """{"relaySessionId":"relay-1","type":"audio","audioBase64":"AAE=","outputGeneration":$outputGeneration,"talkEvent":{"turnId":"$turnId"}}"""
+
   private fun installSpeechRecognitionService() {
     val app = RuntimeEnvironment.getApplication()
     shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
@@ -1198,6 +1248,15 @@ class TalkModeManagerTest {
     val field = target.javaClass.getDeclaredField(name)
     field.isAccessible = true
     return field.get(target)
+  }
+
+  private fun stopRealtimePlayback(
+    manager: TalkModeManager,
+    expectedGeneration: Long,
+  ): Boolean {
+    val method = manager.javaClass.getDeclaredMethod("stopRealtimePlayback", Long::class.javaObjectType)
+    method.isAccessible = true
+    return method.invoke(manager, expectedGeneration) as Boolean
   }
 
   private fun setTalkFailure(

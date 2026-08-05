@@ -154,6 +154,13 @@ private data class PendingRealtimePlaybackMark(
   var targetFrame: Long? = null,
 )
 
+internal data class PendingRealtimeOutputClear(
+  val playbackGeneration: Long,
+  val completion: CompletableDeferred<Unit>,
+)
+
+private typealias RealtimeOutputCancellation = Triple<String?, RealtimeOutputIdentity?, Long>
+
 private class PushToTalkAudioSource(
   val readDescriptor: ParcelFileDescriptor,
   private val writeStream: ParcelFileDescriptor.AutoCloseOutputStream,
@@ -385,18 +392,17 @@ class TalkModeManager internal constructor(
   private var realtimeWrittenFrames = 0L
   private val pendingRealtimePlaybackMarks = LinkedHashMap<String, PendingRealtimePlaybackMark>()
 
-  @Volatile private var pendingRealtimeOutputClear: CompletableDeferred<Unit>? = null
+  private var pendingRealtimeOutputClear: PendingRealtimeOutputClear? = null
   private val realtimeOutputCancellationMutex = Mutex()
 
-  @Volatile private var realtimePlaybackIdentity: RealtimeOutputIdentity? = null
+  private var realtimePlaybackIdentity: RealtimeOutputIdentity? = null
+  private var realtimePlaybackGeneration = 0L
 
   @Volatile
   private var realtimePlaybackEndsAtMs = 0L
 
-  @Volatile
   private var realtimeOutputSuppressed = false
 
-  @Volatile
   private var playbackEnabled = true
   private val playbackGeneration = AtomicLong(0L)
 
@@ -968,8 +974,10 @@ class TalkModeManager internal constructor(
 
   /** Enables or disables local assistant audio playback and stops active audio when disabled. */
   fun setPlaybackEnabled(enabled: Boolean) {
-    if (playbackEnabled == enabled) return
-    playbackEnabled = enabled
+    synchronized(realtimeCapturePauseLock) {
+      if (playbackEnabled == enabled) return
+      playbackEnabled = enabled
+    }
     if (!enabled) {
       stopRealtimePlayback()
       stopSpeaking()
@@ -1340,7 +1348,6 @@ class TalkModeManager internal constructor(
         _isListening.value = true
       }
       "audio" -> {
-        if (realtimeOutputSuppressed) return
         finishRealtimeConversationEntry(VoiceConversationRole.User)
         val audioBase64 = obj["audioBase64"].asStringOrNull() ?: return
         val bytes =
@@ -1350,24 +1357,21 @@ class TalkModeManager internal constructor(
             Log.w(tag, "realtime audio decode failed: ${err.message ?: err::class.simpleName}")
             return
           }
-        parseRealtimeOutputIdentity(obj)?.let { realtimePlaybackIdentity = it }
-        playRealtimeAudio(bytes)
+        playRealtimeAudio(sessionId, bytes, parseRealtimeOutputIdentity(obj))
       }
       "clear" -> {
         val clearGeneration = obj["outputGeneration"].asPositiveLongOrNull()
-        val playbackIdentity = realtimePlaybackIdentity
-        if (
-          clearGeneration != null &&
-          playbackIdentity?.outputGeneration != null &&
-          clearGeneration != playbackIdentity.outputGeneration
-        ) {
-          return
+        val (pending, expectedGeneration) =
+          synchronized(realtimeCapturePauseLock) {
+            val pending = pendingRealtimeOutputClear
+            val currentMatches = clearGeneration == null || realtimePlaybackIdentity?.outputGeneration == clearGeneration
+            pending to (pending?.playbackGeneration ?: realtimePlaybackGeneration.takeIf { currentMatches })
+          }
+        if (expectedGeneration != null && stopRealtimePlayback(expectedGeneration)) {
+          val marks = takePendingRealtimePlaybackMarks()
+          acknowledgeRealtimePlaybackMarks(marks)
         }
-        val marks = takePendingRealtimePlaybackMarks()
-        stopRealtimePlayback()
-        acknowledgeRealtimePlaybackMarks(marks)
-        realtimePlaybackIdentity = null
-        pendingRealtimeOutputClear?.complete(Unit)
+        pending?.completion?.complete(Unit)
       }
       "mark" -> {
         val markName = obj["markName"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
@@ -1448,11 +1452,19 @@ class TalkModeManager internal constructor(
       put("final", JsonPrimitive(true))
     }.toString()
 
-  private fun playRealtimeAudio(bytes: ByteArray) {
-    if (!playbackEnabled || realtimeOutputSuppressed || bytes.isEmpty()) return
-    val queue = ensureRealtimeAudioQueue()
-    if (!queue.trySend(RealtimePlaybackItem.Audio(bytes)).isSuccess) {
-      Log.w(tag, "realtime audio queue full")
+  private fun playRealtimeAudio(
+    sessionId: String,
+    bytes: ByteArray,
+    identity: RealtimeOutputIdentity?,
+  ) {
+    synchronized(realtimeCapturePauseLock) {
+      if (bytes.isEmpty() || !playbackEnabled || realtimeOutputSuppressed || realtimeSessionId != sessionId) return
+      if (!ensureRealtimeAudioQueue().trySend(RealtimePlaybackItem.Audio(bytes)).isSuccess) {
+        Log.w(tag, "realtime audio queue full")
+        return
+      }
+      realtimePlaybackGeneration += 1
+      realtimePlaybackIdentity = identity
     }
   }
 
@@ -1483,7 +1495,6 @@ class TalkModeManager internal constructor(
               for (item in queue) {
                 when (item) {
                   is RealtimePlaybackItem.Audio -> {
-                    if (!playbackEnabled || realtimeOutputSuppressed || realtimeSessionId == null) continue
                     try {
                       writeRealtimeAudio(item.bytes)
                     } catch (err: CancellationException) {
@@ -1648,35 +1659,37 @@ class TalkModeManager internal constructor(
       }
   }
 
-  private fun stopRealtimePlayback() {
-    val audioQueue = realtimeAudioQueue
-    val audioWriterJob = realtimeAudioWriterJob
-    realtimeAudioQueue = null
-    realtimeAudioWriterJob = null
-    audioQueue?.close()
-    audioWriterJob?.cancel()
-    realtimePlaybackIdleJob?.cancel()
-    realtimePlaybackIdleJob = null
-    realtimePlaybackEndsAtMs = 0L
-    synchronized(realtimePlaybackLock) {
-      realtimeAudioTrack?.let { track ->
-        try {
-          track.pause()
-          track.flush()
-          track.stop()
-        } catch (_: Throwable) {
+  private fun stopRealtimePlayback(expectedGeneration: Long? = null): Boolean =
+    synchronized(realtimeCapturePauseLock) {
+      if (expectedGeneration != null && realtimePlaybackGeneration != expectedGeneration) return@synchronized false
+      synchronized(realtimePlaybackLock) {
+        realtimeAudioQueue?.close()
+        realtimeAudioWriterJob?.cancel()
+        realtimePlaybackIdleJob?.cancel()
+        realtimeAudioQueue = null
+        realtimeAudioWriterJob = null
+        realtimePlaybackIdleJob = null
+        realtimeAudioTrack?.let { track ->
+          try {
+            track.pause()
+            track.flush()
+            track.stop()
+          } catch (_: Throwable) {
+          }
+          track.release()
         }
-        track.release()
+        realtimeAudioTrack = null
+        realtimeWrittenFrames = 0L
       }
-      realtimeAudioTrack = null
-      realtimeWrittenFrames = 0L
+      realtimePlaybackEndsAtMs = 0L
+      realtimePlaybackIdentity = null
+      _isSpeaking.value = false
+      _outputLevel.value = null
+      if (_isEnabled.value) {
+        setStatus(nativeText("Listening"))
+      }
+      true
     }
-    _isSpeaking.value = false
-    _outputLevel.value = null
-    if (_isEnabled.value) {
-      setStatus(nativeText("Listening"))
-    }
-  }
 
   private fun stopRealtimeRelay(
     closeSession: Boolean = true,
@@ -1695,12 +1708,12 @@ class TalkModeManager internal constructor(
         realtimeCaptureJob = null
         realtimeAppendJob = null
         realtimeCapturePause = null
+        realtimeOutputSuppressed = false
+        pendingRealtimeOutputClear?.completion?.cancel()
+        pendingRealtimeOutputClear = null
+        realtimePlaybackIdentity = null
         currentSessionId to currentCaptureJobs
       }
-    realtimeOutputSuppressed = false
-    pendingRealtimeOutputClear?.cancel()
-    pendingRealtimeOutputClear = null
-    realtimePlaybackIdentity = null
     if (cancelCapture) {
       captureJobs.first?.cancel()
     }
@@ -1728,8 +1741,7 @@ class TalkModeManager internal constructor(
   }
 
   internal suspend fun pauseRealtimeCaptureForPushToTalk(captureId: String) {
-    val outputIdentity = realtimePlaybackIdentity
-    val captureJobs =
+    val (captureJobs, cancellation) =
       synchronized(realtimeCapturePauseLock) {
         val currentSessionId = realtimeSessionId
         val currentCaptureJobs = realtimeCaptureJob to realtimeAppendJob
@@ -1737,15 +1749,16 @@ class TalkModeManager internal constructor(
         realtimeOutputSuppressed = true
         realtimeCaptureJob = null
         realtimeAppendJob = null
-        currentCaptureJobs
+        currentCaptureJobs to
+          RealtimeOutputCancellation(currentSessionId, realtimePlaybackIdentity, realtimePlaybackGeneration)
       }
-    stopRealtimePlayback()
+    stopRealtimePlayback(cancellation.third)
     val (captureJob, appendJob) = captureJobs
     captureJob?.cancelAndJoin()
     appendJob?.cancelAndJoin()
     // Stop input first so no frame can create new provider output while the
     // cancellation boundary is being established.
-    if (!cancelRealtimeOutput(reason = "android-push-to-talk", identity = outputIdentity)) {
+    if (!cancelRealtimeOutput(reason = "android-push-to-talk", cancellation = cancellation)) {
       Log.w(tag, "realtime output cancellation was not confirmed; closing relay")
       stopRealtimeRelay(preserveStatus = true)
       synchronized(realtimeCapturePauseLock) {
@@ -2920,34 +2933,37 @@ class TalkModeManager internal constructor(
   }
 
   fun stopTts() {
-    realtimeOutputSuppressed = true
-    val outputIdentity = realtimePlaybackIdentity
-    stopRealtimePlayback()
+    val cancellation =
+      synchronized(realtimeCapturePauseLock) {
+        realtimeOutputSuppressed = true
+        RealtimeOutputCancellation(realtimeSessionId, realtimePlaybackIdentity, realtimePlaybackGeneration)
+      }
+    stopRealtimePlayback(cancellation.third)
     scope.launch {
-      cancelRealtimeOutput(reason = "android-stop-tts", identity = outputIdentity)
+      cancelRealtimeOutput(reason = "android-stop-tts", cancellation = cancellation)
     }
     stopSpeaking(resetInterrupt = true)
-    _isSpeaking.value = false
-    setStatus(nativeText("Listening"))
   }
 
   private suspend fun cancelRealtimeOutput(
     reason: String,
-    identity: RealtimeOutputIdentity?,
+    cancellation: RealtimeOutputCancellation,
   ): Boolean =
     realtimeOutputCancellationMutex.withLock {
-      val sessionId = realtimeSessionId ?: return@withLock true
-      val pending = CompletableDeferred<Unit>()
-      pendingRealtimeOutputClear = pending
+      val sessionId = cancellation.first ?: return@withLock true
+      val pending = PendingRealtimeOutputClear(cancellation.third, CompletableDeferred())
+      synchronized(realtimeCapturePauseLock) {
+        if (realtimeSessionId != sessionId) return@withLock true
+        pendingRealtimeOutputClear = pending
+      }
       try {
         requestGateway(
           "talk.session.cancelOutput",
-          buildRealtimeOutputCancellationParams(sessionId, reason, identity),
+          buildRealtimeOutputCancellationParams(sessionId, reason, cancellation.second),
           timeoutMs = 5_000,
         )
-        // The response confirms provider cancellation; clear confirms that the
-        // old playback boundary reached Android before capture can resume.
-        withTimeout(2_000) { pending.await() }
+        // Wait for the old playback boundary before capture resumes.
+        withTimeout(2_000) { pending.completion.await() }
         true
       } catch (err: TimeoutCancellationException) {
         Log.d(tag, "realtime cancelOutput unconfirmed: ${err.message ?: "timeout"}")
@@ -2960,8 +2976,10 @@ class TalkModeManager internal constructor(
         Log.d(tag, "realtime cancelOutput failed: ${err.message ?: err::class.simpleName}")
         false
       } finally {
-        if (pendingRealtimeOutputClear === pending) {
-          pendingRealtimeOutputClear = null
+        synchronized(realtimeCapturePauseLock) {
+          if (pendingRealtimeOutputClear === pending) {
+            pendingRealtimeOutputClear = null
+          }
         }
       }
     }
