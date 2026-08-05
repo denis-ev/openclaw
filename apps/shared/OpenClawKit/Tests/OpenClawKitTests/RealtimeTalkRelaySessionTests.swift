@@ -564,6 +564,7 @@ struct RealtimeTalkRelaySessionTests {
     @Test func `current output cancellation failure terminates and rejects late audio`() async {
         let requests = RealtimeRelayStartupRequestLog()
         var issues: [RealtimeTalkRelayIssue] = []
+        var terminations: [RealtimeTalkRelayTermination] = []
         var statuses: [String] = []
         var speakingStates: [Bool] = []
         var issueWaiter: CheckedContinuation<Void, Never>?
@@ -587,6 +588,7 @@ struct RealtimeTalkRelaySessionTests {
                 issueWaiter?.resume()
                 issueWaiter = nil
             },
+            onTermination: { terminations.append($0) },
             onSpeakingChanged: { speakingStates.append($0) })
         session._test_setRelaySessionId("relay-1")
         await session._test_handleGatewayEvent(outputAudioEvent(generation: 1))
@@ -621,6 +623,7 @@ struct RealtimeTalkRelaySessionTests {
 
         #expect(issues.map(\.code) == ["realtime_output_cancel_failed"])
         #expect(issues.map(\.phase) == ["output-cancel"])
+        #expect(terminations == [.outputCancellationFailed])
         #expect(statuses == issues.map(\.message))
         #expect(await requests.snapshot().map(\.method) == [
             "talk.session.cancelOutput",
@@ -1238,9 +1241,9 @@ struct RealtimeTalkRelaySessionTests {
         _ = try #require(session._test_enqueueMicrophoneFrame(Data([0x01])))
         try session.setInputPaused(true)
         try session.setInputPaused(false)
-        await (try #require(session._test_enqueueMicrophoneFrame(Data([0x02])))).value
+        try await (#require(session._test_enqueueMicrophoneFrame(Data([0x02])))).value
 
         #expect(await requests.snapshot().compactMap { $0.params?["audioBase64"]?.stringValue } == [Data([0x02])
-            .base64EncodedString()])
+                .base64EncodedString()])
     }
 }
