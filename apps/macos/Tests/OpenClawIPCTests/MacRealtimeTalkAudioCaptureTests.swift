@@ -103,52 +103,139 @@ struct MacRealtimeTalkAudioCaptureTests {
         }
     }
 
-    @Test func `built in speaker route suppresses input during playback`() {
-        let route = MacRealtimeTalkOutputRoute(
-            transportType: kAudioDeviceTransportTypeBuiltIn,
-            terminalTypes: [kAudioStreamTerminalTypeSpeaker])
+    @Test func `allowlisted transports preserve barge in only for headphones`() {
+        let transports = [
+            kAudioDeviceTransportTypeBuiltIn,
+            kAudioDeviceTransportTypeUSB,
+            kAudioDeviceTransportTypeBluetooth,
+            kAudioDeviceTransportTypeBluetoothLE,
+        ]
 
-        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: route))
+        for transport in transports {
+            let decision = MacRealtimeTalkOutputRoutePolicy.decision(for: self.route(
+                transport: transport,
+                terminals: [kAudioStreamTerminalTypeHeadphones]))
+            #expect(!decision.suppressesInputDuringOutput)
+            #expect(decision.reason == .isolatedHeadphones)
+        }
     }
 
-    @Test func `isolated output routes preserve barge in`() {
-        let bluetoothHeadset = MacRealtimeTalkOutputRoute(
-            transportType: kAudioDeviceTransportTypeBluetooth,
-            terminalTypes: [kAudioStreamTerminalTypeHeadphones])
-        let usbHeadset = MacRealtimeTalkOutputRoute(
-            transportType: kAudioDeviceTransportTypeUSB,
-            terminalTypes: [kAudioStreamTerminalTypeHeadphones])
-        let builtInHeadphoneTerminal = MacRealtimeTalkOutputRoute(
-            transportType: kAudioDeviceTransportTypeBuiltIn,
-            terminalTypes: [kAudioStreamTerminalTypeHeadphones])
+    @Test func `non allowlisted transports fail closed even with headphone metadata`() {
+        let transports = [
+            kAudioDeviceTransportTypeAggregate,
+            kAudioDeviceTransportTypeVirtual,
+            kAudioDeviceTransportTypeUnknown,
+            kAudioDeviceTransportTypeHDMI,
+            kAudioDeviceTransportTypeDisplayPort,
+        ]
 
-        #expect(!MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: bluetoothHeadset))
-        #expect(!MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: usbHeadset))
-        #expect(!MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: builtInHeadphoneTerminal))
+        for transport in transports {
+            let decision = MacRealtimeTalkOutputRoutePolicy.decision(for: self.route(
+                transport: transport,
+                terminals: [kAudioStreamTerminalTypeHeadphones]))
+            #expect(decision.suppressesInputDuringOutput)
+            #expect(decision.reason == .transportNotAllowlisted)
+        }
     }
 
-    @Test func `unknown output route fails closed`() {
-        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: nil))
+    @Test func `allowlisted routes fail closed for empty speaker and mixed kinds`() {
+        let terminalTables: [([UInt32], MacRealtimeTalkOutputRouteDecisionReason)] = [
+            ([], .outputKindUnavailable),
+            ([kAudioStreamTerminalTypeSpeaker], .outputKindNotHeadphones),
+            (
+                [kAudioStreamTerminalTypeHeadphones, kAudioStreamTerminalTypeSpeaker],
+                .outputKindNotHeadphones),
+        ]
+
+        for (terminals, reason) in terminalTables {
+            let decision = MacRealtimeTalkOutputRoutePolicy.decision(for: self.route(
+                transport: kAudioDeviceTransportTypeUSB,
+                terminals: terminals))
+            #expect(decision.suppressesInputDuringOutput)
+            #expect(decision.reason == reason)
+        }
     }
 
-    @Test func `non isolated and incomplete output routes fail closed`() {
-        let aggregate = MacRealtimeTalkOutputRoute(
-            transportType: kAudioDeviceTransportTypeAggregate,
-            terminalTypes: [kAudioStreamTerminalTypeSpeaker])
-        let virtual = MacRealtimeTalkOutputRoute(
-            transportType: kAudioDeviceTransportTypeVirtual,
-            terminalTypes: [kAudioStreamTerminalTypeSpeaker])
-        let unknown = MacRealtimeTalkOutputRoute(
-            transportType: kAudioDeviceTransportTypeUnknown,
-            terminalTypes: [])
-        let usbWithoutTerminalMetadata = MacRealtimeTalkOutputRoute(
-            transportType: kAudioDeviceTransportTypeUSB,
-            terminalTypes: [])
+    @Test func `selected data source overrides stream terminal metadata both ways`() {
+        let selectedHeadphones = self.route(
+            transport: kAudioDeviceTransportTypeBuiltIn,
+            terminals: [kAudioStreamTerminalTypeSpeaker],
+            source: .selected(kinds: [kAudioStreamTerminalTypeHeadphones]))
+        let selectedSpeaker = self.route(
+            transport: kAudioDeviceTransportTypeBuiltIn,
+            terminals: [kAudioStreamTerminalTypeHeadphones],
+            source: .selected(kinds: [kAudioStreamTerminalTypeSpeaker]))
 
-        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: aggregate))
-        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: virtual))
-        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: unknown))
-        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: usbWithoutTerminalMetadata))
+        let headphonesDecision = MacRealtimeTalkOutputRoutePolicy.decision(for: selectedHeadphones)
+        let speakerDecision = MacRealtimeTalkOutputRoutePolicy.decision(for: selectedSpeaker)
+        #expect(!headphonesDecision.suppressesInputDuringOutput)
+        #expect(headphonesDecision.reason == .isolatedHeadphones)
+        #expect(speakerDecision.suppressesInputDuringOutput)
+        #expect(speakerDecision.reason == .outputKindNotHeadphones)
+    }
+
+    @Test func `supported data source read failure fails closed`() {
+        let route = self.route(
+            transport: kAudioDeviceTransportTypeBluetooth,
+            terminals: [kAudioStreamTerminalTypeHeadphones],
+            source: .failed)
+
+        let decision = MacRealtimeTalkOutputRoutePolicy.decision(for: route)
+        #expect(decision.suppressesInputDuringOutput)
+        #expect(decision.reason == .dataSourceReadFailed)
+        #expect(decision.effectiveKinds.isEmpty)
+    }
+
+    @Test func `missing route fails closed with a stable reason`() {
+        let decision = MacRealtimeTalkOutputRoutePolicy.decision(for: nil)
+
+        #expect(decision.suppressesInputDuringOutput)
+        #expect(decision.reason == .routeUnavailable)
+        #expect(decision.redactedDescription ==
+            "transport=unavailable kinds=[] source=unavailable " +
+            "suppression=true reason=route-unavailable")
+    }
+
+    @Test func `route decision log contains only redacted mechanical metadata`() {
+        let decision = MacRealtimeTalkOutputRoutePolicy.decision(for: self.route(
+            transport: kAudioDeviceTransportTypeBuiltIn,
+            terminals: [kAudioStreamTerminalTypeSpeaker],
+            source: .selected(kinds: [kAudioStreamTerminalTypeHeadphones])))
+
+        #expect(decision.redactedDescription ==
+            "transport='bltn' kinds=['hdph'] source=selected:['hdph'] " +
+            "suppression=false reason=isolated-headphones")
+    }
+
+    @Test func `route decision state deduplicates and recomputes changes`() {
+        var state = MacRealtimeTalkOutputRouteDecisionState()
+        let headphones = self.route(
+            transport: kAudioDeviceTransportTypeUSB,
+            terminals: [kAudioStreamTerminalTypeHeadphones])
+        let speakers = self.route(
+            transport: kAudioDeviceTransportTypeUSB,
+            terminals: [kAudioStreamTerminalTypeSpeaker])
+
+        let initial = state.update(route: headphones)
+        #expect(initial?.suppressesInputDuringOutput == false)
+        #expect(state.update(route: headphones) == nil)
+        let changed = state.update(route: speakers)
+        #expect(changed?.suppressesInputDuringOutput == true)
+        #expect(changed?.reason == .outputKindNotHeadphones)
+        state.reset()
+        #expect(state.current == nil)
+
+        let mixedKinds = [kAudioStreamTerminalTypeSpeaker, kAudioStreamTerminalTypeHeadphones]
+        let firstOrder = self.route(
+            transport: kAudioDeviceTransportTypeUSB,
+            terminals: [],
+            source: .selected(kinds: mixedKinds))
+        let reversedOrder = self.route(
+            transport: kAudioDeviceTransportTypeUSB,
+            terminals: [],
+            source: .selected(kinds: Array(mixedKinds.reversed())))
+        #expect(state.update(route: firstOrder) != nil)
+        #expect(state.update(route: reversedOrder) == nil)
     }
 
     @Test @MainActor func `capture reports a restart failure once`() {
@@ -203,6 +290,17 @@ struct MacRealtimeTalkAudioCaptureTests {
         data.withUnsafeBytes { raw in
             raw.bindMemory(to: Int16.self).map { Int16(littleEndian: $0) }
         }
+    }
+
+    private func route(
+        transport: UInt32,
+        terminals: [UInt32],
+        source: MacRealtimeTalkOutputDataSource = .unsupported) -> MacRealtimeTalkOutputRoute
+    {
+        MacRealtimeTalkOutputRoute(
+            transportType: transport,
+            terminalTypes: terminals,
+            selectedDataSource: source)
     }
 }
 
