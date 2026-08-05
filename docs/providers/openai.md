@@ -161,8 +161,9 @@ explicit runtime config.
 GA OpenAI Realtime voice goes through the public **OpenAI Platform Realtime
 API** and normally requires a Platform API key. Browser Talk can instead use a
 ChatGPT OAuth profile through the Gateway-owned WebRTC offer broker. GPT-Live
-uses the Platform Frameless Bidi `/v1/live` route and requires Platform API-key
-auth.
+Talk uses Platform WebRTC calls plus a Gateway-owned sideband, while backend
+voice consumers use the direct Frameless Bidi WebSocket. Both require Platform
+API-key auth.
 
 Platform auth is resolved in this order: configured realtime API key, `openai`
 API-key profile, then `OPENAI_API_KEY`. GA browser Talk falls back to ChatGPT
@@ -957,9 +958,8 @@ compatibility fallback when the shared
     Discord and Voice Call use the Frameless Bidi
     `wss://api.openai.com/v1/live?model=...` endpoint with Platform API-key auth.
 
-    Use `gpt-live-1-codex` (recommended) or
-    `gpt-live-1-boulder-alpha`. The values `gpt-live-1` and
-    `gpt-live-1-mini` are not valid on this route. Opt in explicitly with
+    Use `gpt-live-1-boulder-alpha`. The values `gpt-live-1-codex`,
+    `gpt-live-1`, and `gpt-live-1-mini` are not valid on this route. Opt in explicitly with
     `talk.realtime.model`; `gpt-realtime-2.1` remains the GA default.
 
     GPT-Live accepts these voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`,
@@ -985,7 +985,7 @@ compatibility fallback when the shared
       talk: {
         realtime: {
           provider: "openai",
-          model: "gpt-live-1-codex",
+          model: "gpt-live-1-boulder-alpha",
           transport: "webrtc",
         },
       },
@@ -1001,7 +1001,7 @@ compatibility fallback when the shared
       talk: {
         realtime: {
           provider: "openai",
-          model: "gpt-live-1-codex",
+          model: "gpt-live-1-boulder-alpha",
           transport: "gateway-relay",
         },
       },

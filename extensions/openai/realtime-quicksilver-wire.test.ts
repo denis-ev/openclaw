@@ -34,7 +34,7 @@ describe("GPT-Live call creation", () => {
       return createCallResponse("v=answer\r\n", `rtc_${requests.length}`);
     }) as unknown as typeof fetch;
     const session = buildOpenAIQuicksilverSession({
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       instructions: "Speak briefly.",
       voice: "marin",
     });
@@ -74,7 +74,7 @@ describe("GPT-Live call creation", () => {
       auth: { type: "oauth", token: "oauth-token", accountId: "acct-1" },
       requestIds: createRequestIds("oauth"),
       sdp: "v=oauth-offer\r\n",
-      session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }),
+      session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-boulder-alpha" }),
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
@@ -135,7 +135,7 @@ describe("GPT-Live call creation", () => {
       status: 403,
       body: "Voice session access denied.",
       message:
-        "GPT-Live rejected the Platform session (403). Verify API-key access, voice, and model for /v1/live. Accepted voices: alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse. Accepted models: gpt-live-1-codex, gpt-live-1-boulder-alpha.",
+        "GPT-Live rejected the Platform session (403). Verify API-key access, voice, and model for /v1/live. Accepted voices: alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse. Accepted model: gpt-live-1-boulder-alpha.",
     },
     {
       name: "Platform waitlist denial",
@@ -149,7 +149,7 @@ describe("GPT-Live call creation", () => {
       status: 400,
       body: "Field `session.model` is not allowed for this Codex realtime session",
       message:
-        "The GPT-Live model value is not permitted on /v1/live. Accepted values are gpt-live-1-codex and gpt-live-1-boulder-alpha.",
+        "The GPT-Live model value is not permitted on /v1/live. Accepted value: gpt-live-1-boulder-alpha.",
     },
   ])("maps $name", async ({ status, body, message }) => {
     const fetchImpl = vi.fn(async () => new Response(body, { status }));
@@ -157,7 +157,7 @@ describe("GPT-Live call creation", () => {
       auth: { type: "api-key", token: "platform-key" },
       requestIds: createRequestIds("error"),
       sdp: "v=offer\r\n",
-      session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }),
+      session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-boulder-alpha" }),
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     await expect(promise).rejects.toMatchObject({
@@ -170,7 +170,7 @@ describe("GPT-Live call creation", () => {
   it.each([
     {
       name: "GPT-Live",
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       expectedMessage: "GPT-Live call creation failed (429): provider diagnostic:",
     },
     {
@@ -253,7 +253,7 @@ describe("GPT-Live call creation", () => {
         auth: { type: "api-key", token: "platform-key" },
         requestIds: createRequestIds("header-fallback"),
         sdp: "v=offer\r\n",
-        session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }),
+        session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-boulder-alpha" }),
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
     ).resolves.toMatchObject({ callId });
@@ -268,7 +268,7 @@ describe("GPT-Live call creation", () => {
         auth: { type: "api-key", token: "platform-key" },
         requestIds: createRequestIds("uuid-location"),
         sdp: "v=offer\r\n",
-        session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }),
+        session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-boulder-alpha" }),
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
     ).resolves.toMatchObject({
@@ -290,7 +290,7 @@ describe("GPT-Live call creation", () => {
         auth: { type: "api-key", token: "platform-key" },
         requestIds: createRequestIds("empty-answer"),
         sdp: "v=offer\r\n",
-        session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }),
+        session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-boulder-alpha" }),
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
     ).rejects.toMatchObject({
@@ -304,7 +304,7 @@ describe("GPT-Live call creation", () => {
     {
       label: "GPT-Live",
       auth: { type: "api-key" as const, token: "platform-key" },
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       location: "/v1/live/rtc_oversized_answer",
     },
     {

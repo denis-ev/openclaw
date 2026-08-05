@@ -46,7 +46,7 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
     const onError = vi.fn();
     const bridge = new OpenAIQuicksilverGatewayBridge({
       providerConfig: {},
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       voice: "marin",
       audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
       onAudio: vi.fn(),

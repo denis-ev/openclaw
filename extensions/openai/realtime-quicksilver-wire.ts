@@ -353,7 +353,7 @@ function decodeOpenAIQuicksilverCallId(params: {
 function describeOpenAIQuicksilverCallError(status: number, detail: string): string {
   const normalized = detail.toLowerCase();
   if (status === 403) {
-    return "GPT-Live rejected the Platform session (403). Verify API-key access, voice, and model for /v1/live. Accepted voices: alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse. Accepted models: gpt-live-1-codex, gpt-live-1-boulder-alpha.";
+    return "GPT-Live rejected the Platform session (403). Verify API-key access, voice, and model for /v1/live. Accepted voices: alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse. Accepted model: gpt-live-1-boulder-alpha.";
   }
   if (
     status === 400 &&
@@ -367,7 +367,7 @@ function describeOpenAIQuicksilverCallError(status: number, detail: string): str
     normalized.includes("session.model") &&
     normalized.includes("not allowed")
   ) {
-    return "The GPT-Live model value is not permitted on /v1/live. Accepted values are gpt-live-1-codex and gpt-live-1-boulder-alpha.";
+    return "The GPT-Live model value is not permitted on /v1/live. Accepted value: gpt-live-1-boulder-alpha.";
   }
   return `GPT-Live call creation failed (${status})${detail ? `: ${detail}` : ""}`;
 }

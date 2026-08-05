@@ -72,7 +72,9 @@ describe("GPT-Live session shaping", () => {
     "shimmer",
     "verse",
   ])("accepts the live-proven %s voice", (voice) => {
-    expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex", voice }).audio).toEqual({
+    expect(
+      buildOpenAIQuicksilverSession({ model: "gpt-live-1-boulder-alpha", voice }).audio,
+    ).toEqual({
       output: { voice },
     });
   });
@@ -80,7 +82,9 @@ describe("GPT-Live session shaping", () => {
   it.each(["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"])(
     "falls back from the rejected %s voice",
     (voice) => {
-      expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex", voice }).audio).toEqual({
+      expect(
+        buildOpenAIQuicksilverSession({ model: "gpt-live-1-boulder-alpha", voice }).audio,
+      ).toEqual({
         output: { voice: "marin" },
       });
     },
@@ -88,7 +92,7 @@ describe("GPT-Live session shaping", () => {
 
   it("bounds initial items to the newest context", () => {
     const session = buildOpenAIQuicksilverSession({
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       initialItems: Array.from({ length: 20 }, (_, index) => ({
         role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
         text: `${index}:${"x".repeat(1_000)}`,
@@ -239,7 +243,7 @@ describe("GPT-Live offer broker", () => {
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: "gpt-live-1-codex",
+          model: "gpt-live-1-boulder-alpha",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         },
         { type: "api-key", token: "platform-key" },
@@ -268,7 +272,7 @@ describe("GPT-Live offer broker", () => {
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: "gpt-live-1-codex",
+          model: "gpt-live-1-boulder-alpha",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         },
         { type: "api-key", token: "platform-key" },
@@ -313,7 +317,7 @@ describe("GPT-Live offer broker", () => {
     });
     try {
       const reservation = await realtime.broker.createBrowserSession(
-        { providerConfig: {}, model: "gpt-live-1-codex", runAgentConsult },
+        { providerConfig: {}, model: "gpt-live-1-boulder-alpha", runAgentConsult },
         { type: "api-key", token: "platform-key" },
       );
       if (reservation.transport !== "webrtc") {
@@ -354,7 +358,7 @@ describe("GPT-Live offer broker", () => {
         const reservation = await realtime.broker.createBrowserSession(
           {
             providerConfig: {},
-            model: "gpt-live-1-codex",
+            model: "gpt-live-1-boulder-alpha",
             runAgentConsult: vi.fn(async () => ({ text: "Done" })),
           },
           { type: "api-key", token: "platform-key" },
@@ -385,7 +389,7 @@ describe("GPT-Live offer broker", () => {
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: "gpt-live-1-codex",
+          model: "gpt-live-1-boulder-alpha",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         },
         { type: "api-key", token: "platform-key" },
@@ -419,7 +423,7 @@ describe("GPT-Live offer broker", () => {
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: "gpt-live-1-codex",
+          model: "gpt-live-1-boulder-alpha",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         },
         { type: "api-key", token: "platform-key" },

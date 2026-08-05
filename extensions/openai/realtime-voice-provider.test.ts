@@ -469,7 +469,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(
       internalApi.resolveBrowserSessionCapabilities({
         providerConfig: { model: "gpt-realtime-2.1" },
-        model: "gpt-live-1-codex",
+        model: "gpt-live-1-boulder-alpha",
       }),
     ).toMatchObject({
       transports: ["webrtc", "gateway-relay"],
@@ -480,7 +480,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(
       internalApi.resolveGatewayRelayCapabilities({
         providerConfig: { model: "gpt-realtime-2.1" },
-        model: "gpt-live-1-codex",
+        model: "gpt-live-1-boulder-alpha",
       }),
     ).toMatchObject({
       transports: ["webrtc", "gateway-relay"],
@@ -1015,21 +1015,21 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(
       readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
         cfg,
-        providerConfig: { model: "gpt-live-1-codex" },
+        providerConfig: { model: "gpt-live-1-boulder-alpha" },
         agentId: "main",
       }),
     ).toBe(false);
     expect(
       readInternalRealtimeVoiceProviderApi(provider).isBrowserSessionConfigured({
         cfg,
-        providerConfig: { model: "gpt-live-1-codex" },
+        providerConfig: { model: "gpt-live-1-boulder-alpha" },
         agentId: "main",
       }),
     ).toBe(false);
     expect(
       readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
         cfg,
-        providerConfig: { model: "gpt-live-1-codex", apiKey: "sk-platform" },
+        providerConfig: { model: "gpt-live-1-boulder-alpha", apiKey: "sk-platform" },
         agentId: "main",
       }),
     ).toBe(true);
@@ -1092,7 +1092,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     await provider.createBrowserSession?.({
       providerConfig: { apiKey: "sk-platform" }, // pragma: allowlist secret
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       agentId: "main",
       workspaceDir: "/tmp/openclaw-agent-workspace",
       initialItems: [],
