@@ -64,7 +64,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Realtime Talk event consistency:** forward the session harness's authoritative turn, transcript, audio, and completion events through the Gateway and Control UI instead of reconstructing a second event stream, preserving event identity and ordering across clients. Thanks @romneyda.
 - **Control UI agent and skill permissions:** gate Agents, Skills, Skill Workshop, and delayed mutation dispatches by the current Gateway method catalog and operator scopes while preserving read-only browsing and legacy Gateway compatibility. Fixes #119176. Thanks @shakkernerd.
 - **Guided onboarding skip-UI routing:** keep `openclaw onboard --skip-ui` and `openclaw setup --skip-ui` on guided onboarding while skipping both browser and terminal handoffs, instead of silently switching to the classic wizard. Thanks @shakkernerd.
 - **Telegram durable ingress:** preserve pre-identity control-lane ownership during replay and attempt each drain snapshot row only once per pass, preventing targeted commands from spinning the spool and blocking polling shutdown.

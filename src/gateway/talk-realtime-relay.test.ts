@@ -1737,6 +1737,54 @@ describe("talk realtime gateway relay", () => {
     expectDelivery(closePayload, false);
   });
 
+  it("publishes recorded input before synchronous provider output", () => {
+    const events: Array<{ payload: Record<string, unknown> }> = [];
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => ({
+        connect: vi.fn(async () => undefined),
+        sendAudio: vi.fn(() => request.onAudio(Buffer.from("provider-output"))),
+        setMediaTimestamp: vi.fn(),
+        handleBargeIn: vi.fn(),
+        submitToolResult: vi.fn(),
+        acknowledgeMark: vi.fn(),
+        close: vi.fn(),
+        isConnected: vi.fn(() => true),
+      }),
+    };
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds: (_event: string, payload: Record<string, unknown>) => {
+          events.push({ payload });
+        },
+      } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from("browser-input").toString("base64"),
+    });
+
+    const sequencedEvents = events
+      .map(({ payload }) => payload.talkEvent)
+      .filter((event): event is Record<string, unknown> => Boolean(event));
+    expect(sequencedEvents.map((event) => event.type)).toEqual([
+      "turn.started",
+      "input.audio.delta",
+      "output.audio.started",
+      "output.audio.delta",
+    ]);
+    expect(sequencedEvents.map((event) => event.seq)).toEqual([1, 2, 3, 4]);
+  });
+
   it("emits generic issue details when relay connect fails", async () => {
     const provider: RealtimeVoiceProviderPlugin = {
       id: "openai",

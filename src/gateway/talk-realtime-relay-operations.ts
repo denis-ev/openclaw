@@ -192,13 +192,15 @@ export function sendTalkRealtimeRelayAudio(params: {
     return;
   }
   broadcastRelayTurnStarted(session, recorded.turn.event);
-  session.bridge.sendAudio(audio);
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "inputAudio",
     byteLength: audio.byteLength,
     talkEvent: recorded.inputAudioDelta,
   });
+  // Publish the recorded input before provider code can synchronously re-enter
+  // with output events, preserving the harness's authoritative sequence order.
+  session.bridge.sendAudio(audio);
   if (typeof params.timestamp === "number" && Number.isFinite(params.timestamp)) {
     session.bridge.setMediaTimestamp(params.timestamp);
   }
