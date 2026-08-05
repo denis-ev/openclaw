@@ -6,7 +6,7 @@ import Testing
 
 struct MacRealtimeTalkAudioCaptureTests {
     @Test func `encoder downmixes resamples and emits little endian pcm16`() throws {
-        let buffer = try self.makeFloatBuffer(
+        let buffer = try makeFloatBuffer(
             sampleRate: 48000,
             channels: [
                 [0, 1, -1, 0.5],
@@ -25,7 +25,7 @@ struct MacRealtimeTalkAudioCaptureTests {
     }
 
     @Test func `encoder interpolates and clamps samples`() throws {
-        let buffer = try self.makeFloatBuffer(
+        let buffer = try makeFloatBuffer(
             sampleRate: 24000,
             channels: [[2, 0, -2]])
 
@@ -73,7 +73,7 @@ struct MacRealtimeTalkAudioCaptureTests {
     }
 
     @Test func `tap handler can run on a realtime audio queue`() throws {
-        let buffer = try self.makeFloatBuffer(
+        let buffer = try makeFloatBuffer(
             sampleRate: 48000,
             channels: [[0, 0.5, -0.5, 0]])
         let gate = MacRealtimeTalkCaptureDeliveryGate()
@@ -101,7 +101,54 @@ struct MacRealtimeTalkAudioCaptureTests {
         #expect(throws: MacRealtimeTalkAudioCaptureError.self) {
             try capture.start(targetSampleRate: 0) { _ in }
         }
-        #expect(capture.suppressesInputDuringOutput)
+    }
+
+    @Test func `built in speaker route suppresses input during playback`() {
+        let route = MacRealtimeTalkOutputRoute(
+            transportType: kAudioDeviceTransportTypeBuiltIn,
+            terminalTypes: [kAudioStreamTerminalTypeSpeaker])
+
+        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: route))
+    }
+
+    @Test func `isolated output routes preserve barge in`() {
+        let bluetoothHeadset = MacRealtimeTalkOutputRoute(
+            transportType: kAudioDeviceTransportTypeBluetooth,
+            terminalTypes: [kAudioStreamTerminalTypeHeadphones])
+        let usbHeadset = MacRealtimeTalkOutputRoute(
+            transportType: kAudioDeviceTransportTypeUSB,
+            terminalTypes: [kAudioStreamTerminalTypeHeadphones])
+        let builtInHeadphoneTerminal = MacRealtimeTalkOutputRoute(
+            transportType: kAudioDeviceTransportTypeBuiltIn,
+            terminalTypes: [kAudioStreamTerminalTypeHeadphones])
+
+        #expect(!MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: bluetoothHeadset))
+        #expect(!MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: usbHeadset))
+        #expect(!MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: builtInHeadphoneTerminal))
+    }
+
+    @Test func `unknown output route fails closed`() {
+        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: nil))
+    }
+
+    @Test func `non isolated and incomplete output routes fail closed`() {
+        let aggregate = MacRealtimeTalkOutputRoute(
+            transportType: kAudioDeviceTransportTypeAggregate,
+            terminalTypes: [kAudioStreamTerminalTypeSpeaker])
+        let virtual = MacRealtimeTalkOutputRoute(
+            transportType: kAudioDeviceTransportTypeVirtual,
+            terminalTypes: [kAudioStreamTerminalTypeSpeaker])
+        let unknown = MacRealtimeTalkOutputRoute(
+            transportType: kAudioDeviceTransportTypeUnknown,
+            terminalTypes: [])
+        let usbWithoutTerminalMetadata = MacRealtimeTalkOutputRoute(
+            transportType: kAudioDeviceTransportTypeUSB,
+            terminalTypes: [])
+
+        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: aggregate))
+        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: virtual))
+        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: unknown))
+        #expect(MacRealtimeTalkOutputRoutePolicy.suppressesInputDuringOutput(for: usbWithoutTerminalMetadata))
     }
 
     @Test @MainActor func `capture reports a restart failure once`() {
