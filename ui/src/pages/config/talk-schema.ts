@@ -71,7 +71,7 @@ export function resolveTalkRealtimeSelection(
 /**
  * Mirrors the server-side gpt-live prefix contract
  * (extensions/openai/realtime-quicksilver.ts); the UI only uses it to decide
- * whether to show the ChatGPT sign-in hint, never to gate a session.
+ * whether to show the Platform API-key requirement, never to gate a session.
  */
 export function isTalkGptLiveModel(model: string | null): boolean {
   return model !== null && model.toLowerCase().startsWith("gpt-live");

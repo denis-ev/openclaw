@@ -4,43 +4,44 @@ import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderTalk } from "./talk.ts";
 
+function gptLiveProps(configBusy: boolean): Parameters<typeof renderTalk>[0] {
+  return {
+    selection: {
+      provider: "openai",
+      model: "gpt-live",
+      speakerVoice: "marin",
+      transport: "webrtc",
+      providerEntries: {},
+    },
+    catalog: {
+      kind: "ready",
+      ready: true,
+      activeProvider: "openai",
+      providers: [
+        {
+          id: "openai",
+          label: "OpenAI",
+          configured: true,
+          aliases: [],
+          models: ["gpt-live"],
+          voices: ["marin"],
+          transports: ["webrtc"],
+          defaultModel: "gpt-live",
+        },
+      ],
+    },
+    configBusy,
+    onProviderChange: vi.fn(),
+    onModelChange: vi.fn(),
+    onVoiceChange: vi.fn(),
+    editor: html``,
+  };
+}
+
 describe("renderTalk", () => {
   it("locks every curated picker when config mutation is unavailable", () => {
     const container = document.createElement("div");
-    render(
-      renderTalk({
-        selection: {
-          provider: "openai",
-          model: "gpt-live",
-          speakerVoice: "marin",
-          transport: "webrtc",
-          providerEntries: {},
-        },
-        catalog: {
-          kind: "ready",
-          ready: true,
-          activeProvider: "openai",
-          providers: [
-            {
-              id: "openai",
-              label: "OpenAI",
-              configured: true,
-              aliases: [],
-              models: ["gpt-live"],
-              voices: ["marin"],
-              transports: ["webrtc"],
-              defaultModel: "gpt-live",
-            },
-          ],
-        },
-        configBusy: true,
-        onProviderChange: vi.fn(),
-        onModelChange: vi.fn(),
-        onVoiceChange: vi.fn(),
-        editor: html``,
-      }),
-      container,
-    );
+    render(renderTalk(gptLiveProps(true)), container);
 
     const provider = container.querySelector<HTMLElement & { disabled?: boolean }>(
       "wa-radio-group",
@@ -52,5 +53,15 @@ describe("renderTalk", () => {
         (select) => select.disabled,
       ),
     ).toBe(true);
+  });
+
+  it("requires Platform API-key auth for GPT-Live Boulder", () => {
+    const container = document.createElement("div");
+    render(renderTalk(gptLiveProps(false)), container);
+
+    const text = container.textContent?.replace(/\s+/gu, " ") ?? "";
+    expect(text).toContain("requires an enrolled OpenAI Platform API key");
+    expect(text).toContain("ChatGPT/Codex OAuth does not configure this preview route");
+    expect(text).not.toContain("No Platform API key needed");
   });
 });

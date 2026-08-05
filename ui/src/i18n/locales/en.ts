@@ -2358,7 +2358,7 @@ export const en: TranslationMap = {
     },
     gptLive: {
       title: "GPT-Live",
-      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed. Browser Talk only. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
+      hint: "GPT-Live Boulder requires an enrolled OpenAI Platform API key with /v1/live access. ChatGPT/Codex OAuth does not configure this preview route. Browser Talk only. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
   },

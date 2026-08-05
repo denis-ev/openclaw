@@ -82,9 +82,8 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     );
 
   /**
-   * The GPT-Live setup this page advertises runs `openclaw models auth login`
-   * in a terminal; that changes credential readiness without advancing the
-   * config hash, so returning focus to the window re-reads the catalog.
+   * GPT-Live Platform credentials can change outside the Control UI without
+   * advancing the config hash, so returning focus re-reads catalog readiness.
    */
   private readonly refreshOnFocus = () => {
     const connection = this.connection;
