@@ -141,13 +141,17 @@ struct RealtimeTalkRelaySessionTests {
         #expect(params == ["sessionId": "relay-1", "markName": "audio-1"])
     }
 
-    @Test func `output cancellation carries playback identity and ignores stale clear`() async throws {
+    @Test func `output cancellation suppresses its generation and admits replacement`() async throws {
+        let barrier = RealtimeRelayStartupBarrier()
         let requests = RealtimeRelayStartupRequestLog()
         var speakingStates: [Bool] = []
         let transport = RealtimeTalkRelaySession.StartupTransport(
             subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
             request: { method, paramsJSON, _ in
                 await requests.record(method: method, paramsJSON: paramsJSON)
+                if method == "talk.session.cancelOutput" {
+                    await barrier.suspend()
+                }
                 return Data("{\"ok\":true}".utf8)
             })
         let session = RealtimeTalkRelaySession(
@@ -171,23 +175,8 @@ struct RealtimeTalkRelaySessionTests {
             ]),
             seq: nil,
             stateversion: nil))
-        await session._test_handleGatewayEvent(EventFrame(
-            type: "event",
-            event: "talk.event",
-            payload: AnyCodable([
-                "relaySessionId": "relay-1",
-                "type": "clear",
-                "outputGeneration": 6,
-            ]),
-            seq: nil,
-            stateversion: nil))
-        #expect(speakingStates == [true])
-
         session.cancelOutput(reason: "barge-in")
-        for _ in 0..<10 {
-            if await !(requests.snapshot()).isEmpty { break }
-            await Task.yield()
-        }
+        await barrier.waitUntilEntered()
 
         let request = try #require(await requests.snapshot().first)
         #expect(request.method == "talk.session.cancelOutput")
@@ -197,6 +186,130 @@ struct RealtimeTalkRelaySessionTests {
         #expect(params["turnId"] as? String == "turn-7")
         #expect(params["outputGeneration"] as? Int == 7)
         #expect(params["reason"] as? String == "barge-in")
+        await barrier.release()
+
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "audio",
+                "audioBase64": Data([0x03, 0x04]).base64EncodedString(),
+                "outputGeneration": 7,
+                "talkEvent": ["turnId": "turn-7"],
+            ]),
+            seq: nil,
+            stateversion: nil))
+        #expect(speakingStates == [true, false])
+
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "audio",
+                "audioBase64": Data([0x05, 0x06]).base64EncodedString(),
+                "outputGeneration": 8,
+                "talkEvent": ["turnId": "turn-8"],
+            ]),
+            seq: nil,
+            stateversion: nil))
+        #expect(speakingStates == [true, false, true])
+
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "clear",
+                "outputGeneration": 7,
+            ]),
+            seq: nil,
+            stateversion: nil))
+        #expect(speakingStates == [true, false, true])
+
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "clear",
+                "outputGeneration": 8,
+            ]),
+            seq: nil,
+            stateversion: nil))
+        #expect(speakingStates == [true, false, true, false])
+    }
+
+    @Test func `output cancellation failure emits typed issue without closing`() async {
+        let requests = RealtimeRelayStartupRequestLog()
+        var issues: [TalkRuntimeIssue] = []
+        var statuses: [String] = []
+        var issueWaiter: CheckedContinuation<Void, Never>?
+        let transport = RealtimeTalkRelaySession.StartupTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { method, paramsJSON, _ in
+                await requests.record(method: method, paramsJSON: paramsJSON)
+                throw URLError(.cannotConnectToHost)
+            })
+        let session = RealtimeTalkRelaySession(
+            gateway: GatewayNodeSession(),
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { statuses.append($0) },
+            onIssue: {
+                issues.append($0)
+                issueWaiter?.resume()
+                issueWaiter = nil
+            },
+            onSpeakingChanged: { _ in },
+            startupTransport: transport)
+        session._test_setRelaySessionId("relay-1")
+
+        await withCheckedContinuation { continuation in
+            issueWaiter = continuation
+            session.cancelOutput()
+        }
+
+        #expect(issues.map(\.code) == [.realtimeOutputCancelFailed])
+        #expect(issues.map(\.phase) == ["output-cancel"])
+        #expect(statuses == issues.map(\.displayMessage))
+        #expect(await requests.snapshot().map(\.method) == ["talk.session.cancelOutput"])
+    }
+
+    @Test func `close invalidates an in flight output cancellation failure`() async {
+        let barrier = RealtimeRelayStartupBarrier()
+        let requests = RealtimeRelayStartupRequestLog()
+        var issues: [TalkRuntimeIssue] = []
+        var statuses: [String] = []
+        let transport = RealtimeTalkRelaySession.StartupTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { method, paramsJSON, _ in
+                await requests.record(method: method, paramsJSON: paramsJSON)
+                if method == "talk.session.cancelOutput" {
+                    await barrier.suspend()
+                    throw URLError(.cannotConnectToHost)
+                }
+                return Data("{\"ok\":true}".utf8)
+            })
+        let session = RealtimeTalkRelaySession(
+            gateway: GatewayNodeSession(),
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { statuses.append($0) },
+            onIssue: { issues.append($0) },
+            onSpeakingChanged: { _ in },
+            startupTransport: transport)
+        session._test_setRelaySessionId("relay-1")
+
+        session.cancelOutput()
+        await barrier.waitUntilEntered()
+        session.stop()
+        await barrier.release()
+        await Task.yield()
+
+        #expect(issues.isEmpty)
+        #expect(statuses.isEmpty)
     }
 
     @Test func `close after classified error does not replace issue`() async {
