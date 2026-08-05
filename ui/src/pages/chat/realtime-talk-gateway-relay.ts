@@ -7,6 +7,11 @@ import {
   RealtimeTalkPcmOutputQueue,
   type RealtimeTalkAudioFrame,
 } from "./realtime-talk-audio.ts";
+import {
+  estimateGatewayRelayEventBytes,
+  MAX_PENDING_ACTIVATION_EVENT_BYTES,
+  parseGatewayRelayOutputGeneration,
+} from "./realtime-talk-gateway-relay-types.ts";
 import type { DelayedToolResult, GatewayRelayEvent } from "./realtime-talk-gateway-relay-types.ts";
 import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import {
@@ -27,18 +32,6 @@ const MAX_PENDING_AUDIO_APPENDS = 4;
 const AUDIO_APPEND_TIMEOUT_MS = 8_000;
 const RELAY_CLOSE_TIMEOUT_MS = 8_000;
 const MAX_PENDING_ACTIVATION_EVENTS = 32;
-const MAX_PENDING_ACTIVATION_EVENT_BYTES = 256 * 1024;
-
-function estimateRelayEventBytes(event: GatewayRelayEvent): number {
-  try {
-    const serialized = JSON.stringify(event);
-    // Browser strings may use two bytes per code unit; use the upper bound without
-    // allocating a second encoded copy on this realtime event path.
-    return (serialized?.length ?? 0) * 2;
-  } catch {
-    return MAX_PENDING_ACTIVATION_EVENT_BYTES + 1;
-  }
-}
 
 export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport {
   private media: MediaStream | null = null;
@@ -58,7 +51,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private readonly delayedToolResults = new Set<DelayedToolResult>();
   private readonly markAckTimers = new Set<number>();
   private cancelRequestedForPlayback = false;
-  private playbackOverflowed = false;
+  private playbackOverflowOutputGeneration: number | null | undefined;
   private playbackTurnId: string | undefined;
   private playbackOutputGeneration: number | undefined;
   private pendingOutputCancellations = 0;
@@ -104,7 +97,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         signal: mediaSetupController.signal,
       });
     } catch (error) {
-      const startupError = this.currentStartupError();
+      const startupError = this.startupError;
       if (startupError) {
         throw startupError;
       }
@@ -117,7 +110,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         this.mediaSetupController = null;
       }
     }
-    const startupError = this.currentStartupError();
+    const startupError = this.startupError;
     if (startupError) {
       media.getTracks().forEach((track) => track.stop());
       throw startupError;
@@ -196,7 +189,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.abortConsults();
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
-    this.playbackOverflowed = false;
+    this.playbackOverflowOutputGeneration = undefined;
     this.stopOutput();
     void this.inputContext?.close();
     this.inputContext = null;
@@ -261,10 +254,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.pendingAudioAppends.clear();
   }
 
-  private currentStartupError(): Error | null {
-    return this.startupError;
-  }
-
   private handleIncomingRelayEvent(event: GatewayRelayEvent): void {
     if (event.relaySessionId !== this.session.relaySessionId || this.closed) {
       return;
@@ -287,7 +276,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       this.stopLocal();
       return;
     }
-    const eventBytes = estimateRelayEventBytes(event);
+    const eventBytes = estimateGatewayRelayEventBytes(event);
     if (
       this.pendingActivationEvents.length >= MAX_PENDING_ACTIVATION_EVENTS ||
       eventBytes > MAX_PENDING_ACTIVATION_EVENT_BYTES - this.pendingActivationEventBytes
@@ -321,39 +310,46 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           break;
         case "audioStarted":
           break;
-        case "audio":
-          if (event.audioBase64 && !this.playbackOverflowed) {
-            const turnId = event.talkEvent?.turnId?.trim();
-            if (turnId) {
-              this.playbackTurnId = turnId;
-            }
-            const outputGeneration = event.outputGeneration;
-            if (
-              typeof outputGeneration === "number" &&
-              Number.isSafeInteger(outputGeneration) &&
-              outputGeneration > 0
-            ) {
-              this.playbackOutputGeneration = outputGeneration;
-            }
-            this.cancelRequestedForPlayback = false;
-            this.speechFramesDuringPlayback = 0;
-            this.playPcm16(event.audioBase64);
+        case "audio": {
+          const audioOutputGeneration = parseGatewayRelayOutputGeneration(event.outputGeneration);
+          if (!event.audioBase64 || audioOutputGeneration === null) {
+            return;
           }
+          if (this.playbackOverflowOutputGeneration !== undefined) {
+            if (
+              audioOutputGeneration === undefined ||
+              audioOutputGeneration === this.playbackOverflowOutputGeneration
+            ) {
+              return;
+            }
+            this.playbackOverflowOutputGeneration = undefined;
+          }
+          this.playbackTurnId = event.talkEvent?.turnId?.trim() || this.playbackTurnId;
+          this.playbackOutputGeneration = audioOutputGeneration ?? this.playbackOutputGeneration;
+          this.cancelRequestedForPlayback = false;
+          this.speechFramesDuringPlayback = 0;
+          this.playPcm16(event.audioBase64);
           return;
-        case "clear":
+        }
+        case "clear": {
+          const clearOutputGeneration = parseGatewayRelayOutputGeneration(event.outputGeneration);
+          if (clearOutputGeneration === null) {
+            return;
+          }
           if (
-            event.outputGeneration !== undefined &&
-            this.playbackOutputGeneration !== undefined &&
-            event.outputGeneration !== this.playbackOutputGeneration
+            clearOutputGeneration !== undefined &&
+            clearOutputGeneration !== this.playbackOutputGeneration &&
+            clearOutputGeneration !== this.playbackOverflowOutputGeneration
           ) {
             return;
           }
-          this.playbackOverflowed = false;
+          this.playbackOverflowOutputGeneration = undefined;
           this.stopOutput({ releaseDelayedToolResults: this.pendingOutputCancellations === 0 });
           if (event.talkEvent?.type === "turn.cancelled") {
             this.abortConsults();
           }
           return;
+        }
         case "mark":
           if (event.markName) {
             this.scheduleMarkAck(event.markName);
@@ -408,7 +404,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       this.session.audio.outputSampleRateHz,
     );
     if (result === "overflow") {
-      this.playbackOverflowed = true;
+      // Cancellation stops the queue and clears its active identity. Retain that
+      // identity on the overflow latch so late frames cannot reopen playback.
+      this.playbackOverflowOutputGeneration = this.playbackOutputGeneration ?? null;
       this.cancelOutput("playback-overflow", false);
     }
   }

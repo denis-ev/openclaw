@@ -488,7 +488,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
   });
 
-  it("cancels overflowing playback and ignores late audio until provider clear", async () => {
+  it("admits a replacement generation after overflowing playback", async () => {
     const client = createClient();
     const transport = createTransport({ client });
 
@@ -498,15 +498,17 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         relaySessionId: "relay-1",
         type: "audio",
         audioBase64: "AAAA",
+        outputGeneration: 1,
       });
     }
 
     await waitForFast(() =>
-      expect(requestCallsFor(client, "talk.session.cancelOutput")).toEqual([
+      expect(requestCallsFor(client, "talk.session.cancelOutput")).toStrictEqual([
         [
           "talk.session.cancelOutput",
           {
             sessionId: "relay-1",
+            outputGeneration: 1,
             reason: "playback-overflow",
           },
         ],
@@ -519,17 +521,30 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       relaySessionId: "relay-1",
       type: "audio",
       audioBase64: "AAAA",
+      outputGeneration: 1,
     });
-    expect(createdSources).toHaveLength(320);
-
-    emitTalkEvent({ relaySessionId: "relay-1", type: "clear" });
+    emitTalkEvent({ relaySessionId: "relay-1", type: "audio", audioBase64: "AAAA" });
     emitTalkEvent({
       relaySessionId: "relay-1",
       type: "audio",
       audioBase64: "AAAA",
+      outputGeneration: 0,
+    });
+    expect(createdSources).toHaveLength(320);
+
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: "AAAA",
+      outputGeneration: 2,
     });
     expect(createdSources).toHaveLength(321);
     expect(createdSources.at(-1)?.start).toHaveBeenCalledOnce();
+
+    emitTalkEvent({ relaySessionId: "relay-1", type: "clear", outputGeneration: 1 });
+    expect(createdSources.at(-1)?.stop).not.toHaveBeenCalled();
+    emitTalkEvent({ relaySessionId: "relay-1", type: "clear", outputGeneration: 2 });
+    expect(createdSources.at(-1)?.stop).toHaveBeenCalledOnce();
 
     transport.stop();
   });
@@ -559,7 +574,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     await waitForFast(() =>
-      expect(requestCallsFor(client, "talk.session.cancelOutput")).toEqual([
+      expect(requestCallsFor(client, "talk.session.cancelOutput")).toStrictEqual([
         [
           "talk.session.cancelOutput",
           {
@@ -573,6 +588,54 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     );
     expect(createdSources).toHaveLength(0);
 
+    transport.stop();
+  });
+
+  it("reopens an overflowed generation after its matching clear", async () => {
+    const transport = createTransport({ client: createClient() });
+
+    await startTransport(transport);
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: zeroPcmBase64(24000 * 11),
+      outputGeneration: 3,
+    });
+    emitTalkEvent({ relaySessionId: "relay-1", type: "clear", outputGeneration: 3 });
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: "AAAA",
+      outputGeneration: 3,
+    });
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0]?.start).toHaveBeenCalledOnce();
+    transport.stop();
+  });
+
+  it("clears the overflow latch when the transport restarts", async () => {
+    const transport = createTransport({ client: createClient() });
+
+    await startTransport(transport);
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: zeroPcmBase64(24000 * 11),
+      outputGeneration: 4,
+    });
+    transport.stop();
+
+    await startTransport(transport);
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: "AAAA",
+      outputGeneration: 4,
+    });
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0]?.start).toHaveBeenCalledOnce();
     transport.stop();
   });
 
