@@ -242,6 +242,23 @@ function collectMediaProviderIds(root: Record<string, unknown>, ids: Set<string>
   }
 }
 
+function collectTalkRealtimeProviderIds(root: Record<string, unknown>, ids: Set<string>): void {
+  const realtime = asNullableRecord(asNullableRecord(root.talk)?.realtime);
+  if (!realtime) {
+    return;
+  }
+  const provider = realtime.provider;
+  if (typeof provider === "string" && provider.trim()) {
+    ids.add(normalizeProviderId(provider));
+  }
+  const providers = asNullableRecord(realtime.providers);
+  if (providers) {
+    for (const providerId of Object.keys(providers)) {
+      ids.add(normalizeProviderId(providerId));
+    }
+  }
+}
+
 export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   const ids = new Set<string>();
   const root = asNullableRecord(raw);
@@ -273,6 +290,7 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   }
 
   collectMediaProviderIds(root, ids);
+  collectTalkRealtimeProviderIds(root, ids);
 
   if (hasLegacyElevenLabsTalkFields(root)) {
     ids.add("elevenlabs");
@@ -320,8 +338,11 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
       collectMediaProviderIds(root, ids);
       continue;
     }
-    if (first === "talk" && hasLegacyElevenLabsTalkFields(root)) {
-      ids.add("elevenlabs");
+    if (first === "talk") {
+      collectTalkRealtimeProviderIds(root, ids);
+      if (hasLegacyElevenLabsTalkFields(root)) {
+        ids.add("elevenlabs");
+      }
     }
   }
 

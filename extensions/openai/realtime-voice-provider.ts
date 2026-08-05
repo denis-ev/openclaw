@@ -57,6 +57,8 @@ import {
   resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
 import {
+  assertSupportedOpenAIGptLiveModel,
+  getUnsupportedOpenAIGptLiveModelMessage,
   isOpenAIGptLiveModel,
   isSupportedOpenAIGptLiveModel,
   OPENAI_GPT_LIVE_MODELS,
@@ -1887,6 +1889,7 @@ async function createOpenAIRealtimeBrowserSession(
 
   const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
   if (isOpenAIGptLiveModel(model)) {
+    assertSupportedOpenAIGptLiveModel(model);
     if (!quicksilverBroker) {
       throw new Error("OpenAI GPT-Live browser session broker is unavailable");
     }
@@ -2025,6 +2028,9 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ cfg, providerConfig }) => {
       const config = normalizeProviderConfig(providerConfig);
+      if (isOpenAIGptLiveModel(config.model) && !isSupportedOpenAIGptLiveModel(config.model)) {
+        return false;
+      }
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
       }
@@ -2042,6 +2048,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
       const config = normalizeProviderConfig(req.providerConfig);
       const model = config.model;
       if (model && isOpenAIGptLiveModel(model)) {
+        assertSupportedOpenAIGptLiveModel(model);
         if (config.azureEndpoint || config.azureDeployment) {
           throw new Error(
             "GPT-Live backend WebSocket sessions do not support Azure endpoints or deployments",
@@ -2172,6 +2179,10 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
     },
     validateGatewayRelayLaunch: ({ providerConfig, model, autoRespondToAudio }) => {
       const config = normalizeProviderConfig(providerConfig);
+      const unsupportedModel = getUnsupportedOpenAIGptLiveModelMessage(model ?? config.model);
+      if (unsupportedModel) {
+        return unsupportedModel;
+      }
       if (autoRespondToAudio === false && isOpenAIGptLiveModel(model ?? config.model)) {
         return "GPT-Live gateway-relay sessions cannot use forced agent consult routing; GPT-Live delegates to the agent natively";
       }

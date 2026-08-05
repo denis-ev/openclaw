@@ -444,6 +444,27 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["gemini", "openai", "xai"]);
   });
 
+  it("collects provider ids from Talk realtime configuration", () => {
+    const raw = {
+      talk: {
+        realtime: {
+          provider: " OpenAI ",
+          providers: {
+            xAI: { model: "grok-voice" },
+          },
+        },
+      },
+    };
+
+    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["openai", "xai"]);
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw,
+        touchedPaths: [["talk", "realtime", "model"]],
+      }),
+    ).toEqual(["openai", "xai"]);
+  });
+
   it("loads a plugin doctor contract when scoped by a contributed provider id", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");

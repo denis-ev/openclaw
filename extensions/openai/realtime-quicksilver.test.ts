@@ -1,6 +1,10 @@
 // Openai tests cover GPT-Live (quicksilver) realtime voice gating.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
+import {
+  assertSupportedOpenAIGptLiveModel,
+  isOpenAIGptLiveModel,
+  isSupportedOpenAIGptLiveModel,
+} from "./realtime-quicksilver.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const mintSecretMock = vi.hoisted(() => vi.fn());
@@ -35,6 +39,16 @@ describe("openai gpt-live model detection", () => {
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1-codex")).toBe(false);
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1")).toBe(false);
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1-mini")).toBe(false);
+  });
+
+  it("rejects unsupported GPT-Live models with an actionable migration", () => {
+    expect(() => assertSupportedOpenAIGptLiveModel("gpt-live-1-codex")).toThrow(
+      'Use "gpt-live-1-boulder-alpha". Run "openclaw doctor --fix"',
+    );
+    expect(() => assertSupportedOpenAIGptLiveModel("gpt-live-1-mini")).toThrow(
+      'Use "gpt-live-1-boulder-alpha"',
+    );
+    expect(() => assertSupportedOpenAIGptLiveModel("gpt-realtime-2.1")).not.toThrow();
   });
 });
 
@@ -74,13 +88,13 @@ describe("openai realtime voice provider gpt-live transport routing", () => {
         providerConfig: { apiKey: "test-key", model: "gpt-live-1-boulder-alpha" },
       }),
     ).toMatchObject({ supportsToolResultContinuation: true });
-    expect(
+    expect(() =>
       provider.createBridge({
         ...callbacks,
         providerConfig: { apiKey: "test-key", model: "gpt-live-1" },
         runAgentConsult: vi.fn(async () => ({ text: "done" })),
       }),
-    ).toMatchObject({ supportsToolResultContinuation: false });
+    ).toThrow('Unsupported GPT-Live model "gpt-live-1"');
     expect(() =>
       provider.createBridge({
         ...callbacks,
