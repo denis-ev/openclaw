@@ -73,8 +73,9 @@ behavior, or model selection.
   of full tool schemas.
 - Better orchestration: the model can use loops, joins, small transforms,
   conditional logic, and parallel nested tool calls inside one code cell.
-- Fewer model round trips: a declared output contract lets the model call and
-  transform a tool result in one `exec`; unknown outputs remain raw-first.
+- Fewer model round trips: a declared output contract lets the model perform
+  deterministic transforms in one `exec`; unknown outputs remain raw-first,
+  while ambiguous target selection retains a model-observation boundary.
 - Provider neutral: works for OpenClaw, plugin, MCP, and client tools without
   depending on provider-native code execution.
 - Fails closed: if code mode is enabled but the QuickJS-WASI runtime is
@@ -148,7 +149,7 @@ Set explicit limits for tighter bounds:
 }
 ```
 
-### What the model does
+### Deterministic one-cell composition
 
 For a tool with a declared output such as
 `Array<{ id: string; paid: boolean; tons: number }>`, one guest program can
@@ -160,10 +161,39 @@ const shipments = await tools.callValue(shipmentTool.id, {});
 return shipments.filter((shipment) => !shipment.paid && shipment.tons > 10);
 ```
 
-When a quick-index line ends in `-> ?`, the output shape is unknown. The first
-`exec` must return `await tools.callValue(...)` unchanged. A later `exec` can
-transform the observed value. This costs an extra model turn, but prevents the
-model from guessing field names.
+`tools.search(...)` above discovers a catalog tool ID, not an application
+target, so catalog lookup can stay inline with deterministic transforms and
+dependent calls. When the request or trusted prior context supplies a stable
+application target ID, guest code can mutate it directly:
+
+```javascript
+return await tools.conversations_send({
+  conversationRef: "exact-context-conversation-ref",
+  message: "Build finished.",
+});
+```
+
+When tool data discovers application target identity, return candidates or
+evidence for model observation instead of mutating in that cell:
+
+```javascript
+const listed = await tools.conversations_list({ query: "build bot" });
+return listed.conversations.map(({ conversationRef, label }) => ({
+  conversationRef,
+  label,
+}));
+```
+
+The next model turn can choose the observed stable ID and perform the mutation.
+This boundary applies to application data regardless of whether code found one
+or several candidates; it does not impose an extra turn on catalog discovery.
+Conflicting authority, permission, or ownership evidence also returns before
+mutation. Normal tool policy and approvals still apply in every case.
+
+When a quick-index line ends in `-> ?`, the output shape remains schema
+ambiguity. The first `exec` must return `await tools.callValue(...)` unchanged.
+A later `exec` can transform the observed value. This costs an extra model
+turn, but prevents the model from guessing field names.
 
 ### Verify the active surface
 
@@ -542,10 +572,8 @@ read `ALL_TOOLS` or call `tools.search(...)` inside the guest program.
 
 The arrow in each quick-index line describes the `tools.callValue(...)` value.
 `-> Array<{ id: string }>` is a declared output hint; `-> ?` is output unknown.
-Unknown outputs stay raw-first: return the value unchanged, observe it, then
-filter or map it in a later `exec` instead of guessing field names. This also
-applies when a declared-output read feeds a final `-> ?` call: return that
-call's raw value without wrapping it in the requested answer shape.
+See [Deterministic one-cell composition](#deterministic-one-cell-composition)
+for the declared-output, ambiguity, authority, and unknown-output rules.
 
 ```typescript
 type ToolCatalogEntry = {
@@ -682,20 +710,9 @@ metadata; `web_search` declares its exact normalized results/answer/error/raw
 union as a complete quick-index hint. Filesystem contracts return structured
 read text, image, truncation, and optional-not-found outcomes; explicit edit
 change state plus diff/patch data; and apply-patch path summaries. When the
-quick index declares the fields, one cell can compose discovery and delivery
-without a separate inspection turn:
-
-```javascript
-const listed = await tools.conversations_list({ query: "build bot" });
-const target = listed.conversations.find((item) => item.label === "Build bot");
-if (!target) throw new Error("conversation not found");
-return await tools.conversations_send({
-  conversationRef: target.conversationRef,
-  message: "Build finished.",
-});
-```
-
-The nested calls still use normal tool policy, hooks, and approvals. If a full
+quick index declares the fields, follow
+[Deterministic one-cell composition](#deterministic-one-cell-composition).
+Nested calls still use normal tool policy, hooks, and approvals. If a full
 contract is exact but too large for the bounded quick index, it remains
 available through `tools.describe(...)` and the arrow stays `-> ?`.
 
