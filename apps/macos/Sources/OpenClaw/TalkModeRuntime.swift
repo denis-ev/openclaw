@@ -85,7 +85,8 @@ actor TalkModeRuntime {
     private var realtimeMode: String?
     private var realtimeTransport: String?
     private var realtimeBrain: String?
-    private var realtimeRelayEnabled = false
+    private var hasGatewayRealtimeRelayTuple = false
+    private var macOSRealtimeRelayOptIn = false
     var realtimeSession: RealtimeTalkRelaySession?
     var realtimeSessionReadyAt: Date?
     var rapidRealtimeRestartCount = 0
@@ -124,6 +125,13 @@ actor TalkModeRuntime {
         } else {
             await self.stop()
         }
+    }
+
+    func realtimeRelayPreferenceDidChange() async {
+        guard self.isEnabled else { return }
+        self.lifecycleGeneration &+= 1
+        await self.stop()
+        await self.start()
     }
 
     func setPaused(_ paused: Bool) async {
@@ -320,15 +328,28 @@ actor TalkModeRuntime {
     }
 
     private func shouldAttemptRealtimeRelay() -> Bool {
-        guard self.realtimeMode == "realtime" else { return false }
-        guard self.realtimeRelayEnabled else {
+        guard self.macOSRealtimeRelayOptIn else {
+            self.logger.debug("talk macOS realtime relay disabled locally; using native speech")
+            return false
+        }
+        guard self.hasGatewayRealtimeRelayTuple else {
             self.logger.warning(
-                "talk macOS realtime relay not explicitly enabled: " +
+                "talk macOS realtime relay opted in but Gateway tuple is incompatible: " +
+                    "mode=\(self.realtimeMode ?? "missing", privacy: .public) " +
                     "transport=\(self.realtimeTransport ?? "missing", privacy: .public) " +
                     "brain=\(self.realtimeBrain ?? "missing", privacy: .public); using native fallback")
             return false
         }
-        return true
+        return Self.shouldUseRealtimeRelay(
+            localOptIn: self.macOSRealtimeRelayOptIn,
+            hasGatewayRealtimeRelayTuple: self.hasGatewayRealtimeRelayTuple)
+    }
+
+    static func shouldUseRealtimeRelay(
+        localOptIn: Bool,
+        hasGatewayRealtimeRelayTuple: Bool) -> Bool
+    {
+        localOptIn && hasGatewayRealtimeRelayTuple
     }
 
     // MARK: - Speech recognition
@@ -1458,7 +1479,10 @@ extension TalkModeRuntime {
         self.realtimeMode = cfg.realtimeMode
         self.realtimeTransport = cfg.realtimeTransport
         self.realtimeBrain = cfg.realtimeBrain
-        self.realtimeRelayEnabled = cfg.enablesMacOSRealtimeRelay
+        self.hasGatewayRealtimeRelayTuple = cfg.hasGatewayRealtimeRelayTuple
+        self.macOSRealtimeRelayOptIn = await MainActor.run {
+            AppStateStore.shared.talkRealtimeRelayEnabled
+        }
         let configuredSilenceMs = cfg.silenceTimeoutMs
         let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
         let isCJKLocale = locale.hasPrefix("ko") || locale.hasPrefix("ja") || locale.hasPrefix("zh")
@@ -1489,7 +1513,8 @@ extension TalkModeRuntime {
                     "speechLocale=\(cfg.speechLocaleID ?? "device", privacy: .public) " +
                     "realtimeMode=\(cfg.realtimeMode ?? "off", privacy: .public) " +
                     "realtimeTransport=\(cfg.realtimeTransport ?? "default", privacy: .public) " +
-                    "realtimeBrain=\(cfg.realtimeBrain ?? "default", privacy: .public)")
+                    "realtimeBrain=\(cfg.realtimeBrain ?? "default", privacy: .public) " +
+                    "macOSRealtimeOptIn=\(self.macOSRealtimeRelayOptIn, privacy: .public)")
     }
 
     static func selectTalkProviderConfig(

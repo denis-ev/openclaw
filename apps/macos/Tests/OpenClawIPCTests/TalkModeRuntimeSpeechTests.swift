@@ -34,6 +34,30 @@ private final class RuntimeTestPCMPlayer: PCMStreamingAudioPlaying {
 }
 
 struct TalkModeRuntimeSpeechTests {
+    @Test func `macOS realtime relay requires local opt in and exact Gateway tuple`() {
+        #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
+            localOptIn: false,
+            hasGatewayRealtimeRelayTuple: false))
+        #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
+            localOptIn: false,
+            hasGatewayRealtimeRelayTuple: true))
+        #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
+            localOptIn: true,
+            hasGatewayRealtimeRelayTuple: false))
+        #expect(TalkModeRuntime.shouldUseRealtimeRelay(
+            localOptIn: true,
+            hasGatewayRealtimeRelayTuple: true))
+    }
+
+    @Test @MainActor func `macOS realtime relay preference defaults off and reads explicit opt in`() async {
+        await TestIsolation.withUserDefaultsValues([talkRealtimeRelayEnabledKey: nil]) {
+            #expect(!AppState(preview: true).talkRealtimeRelayEnabled)
+        }
+        await TestIsolation.withUserDefaultsValues([talkRealtimeRelayEnabledKey: true]) {
+            #expect(AppState(preview: true).talkRealtimeRelayEnabled)
+        }
+    }
+
     @Test func `speech request uses dictation defaults`() {
         let request = SFSpeechAudioBufferRecognitionRequest()
 

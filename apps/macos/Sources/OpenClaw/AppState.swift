@@ -258,6 +258,17 @@ final class AppState {
         }
     }
 
+    var talkRealtimeRelayEnabled: Bool {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.talkRealtimeRelayEnabled, forKey: talkRealtimeRelayEnabledKey)
+                if self.talkEnabled, self.talkRealtimeRelayEnabled != oldValue {
+                    Task { await TalkModeRuntime.shared.realtimeRelayPreferenceDidChange() }
+                }
+            }
+        }
+    }
+
     var talkPhaseSoundsEnabled: Bool {
         didSet {
             self.ifNotPreview {
@@ -484,6 +495,7 @@ final class AppState {
         self.voiceWakeTriggersTalkMode = UserDefaults.standard
             .object(forKey: voiceWakeTriggersTalkModeKey) as? Bool ?? false
         self.talkEnabled = UserDefaults.standard.bool(forKey: talkEnabledKey)
+        self.talkRealtimeRelayEnabled = isTalkRealtimeRelayEnabled()
         if let storedPhaseSounds = UserDefaults.standard.object(forKey: talkPhaseSoundsEnabledKey) as? Bool {
             self.talkPhaseSoundsEnabled = storedPhaseSounds
         } else {
@@ -1537,6 +1549,7 @@ extension AppState {
         state.voiceWakeAdditionalLocaleIDs = ["en-US", "de-DE"]
         state.voicePushToTalkEnabled = false
         state.talkEnabled = false
+        state.talkRealtimeRelayEnabled = false
         state.talkPhaseSoundsEnabled = true
         state.talkShiftToStopEnabled = true
         state.iconOverride = .system
