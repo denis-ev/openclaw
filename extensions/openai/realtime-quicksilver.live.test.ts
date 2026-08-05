@@ -121,7 +121,7 @@ describeLive("GPT-Live Platform WebSocket", () => {
       }
       const bridge = new OpenAIQuicksilverVoiceBridge({
         providerConfig: {},
-        model: "gpt-live-1-codex",
+        model: "gpt-live-1-boulder-alpha",
         voice: "marin",
         instructions: "Keep this transport verification session silent.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
