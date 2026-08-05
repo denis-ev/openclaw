@@ -82,8 +82,8 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     );
 
   /**
-   * GPT-Live Platform credentials can change outside the Control UI without
-   * advancing the config hash, so returning focus re-reads catalog readiness.
+   * GPT-Live Platform and OAuth credentials can change outside the Control UI
+   * without advancing the config hash, so focus re-reads catalog readiness.
    */
   private readonly refreshOnFocus = () => {
     const connection = this.connection;

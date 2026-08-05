@@ -55,13 +55,13 @@ describe("renderTalk", () => {
     ).toBe(true);
   });
 
-  it("requires Platform API-key auth for GPT-Live Boulder", () => {
+  it("describes GPT-Live broker and standalone auth boundaries", () => {
     const container = document.createElement("div");
     render(renderTalk(gptLiveProps(false)), container);
 
     const text = container.textContent?.replace(/\s+/gu, " ") ?? "";
-    expect(text).toContain("requires an enrolled OpenAI Platform API key");
-    expect(text).toContain("ChatGPT/Codex OAuth does not configure this preview route");
-    expect(text).not.toContain("No Platform API key needed");
+    expect(text).toContain("prefer an enrolled OpenAI Platform API key");
+    expect(text).toContain("use ChatGPT OAuth only when no Platform source is configured");
+    expect(text).toContain("Voice Call and Discord require Platform auth");
   });
 });

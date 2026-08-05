@@ -278,8 +278,8 @@ function renderVoiceRow(props: TalkViewProps) {
 }
 
 /**
- * GPT-Live uses the Platform-only preview route instead of the GA browser OAuth
- * fallback, so it gets its own explainer row rather than a provider footnote.
+ * GPT-Live has preview-specific broker and standalone auth boundaries, so it
+ * gets its own explainer row rather than a provider footnote.
  */
 function renderGptLiveRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);

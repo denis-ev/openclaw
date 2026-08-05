@@ -2358,7 +2358,7 @@ export const en: TranslationMap = {
     },
     gptLive: {
       title: "GPT-Live",
-      hint: "GPT-Live Boulder requires an enrolled OpenAI Platform API key with /v1/live access. ChatGPT/Codex OAuth does not configure this preview route. Browser Talk only. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
+      hint: "GPT-Live Boulder is an explicit-config preview. Browser and Gateway-relay Talk prefer an enrolled OpenAI Platform API key, then use ChatGPT OAuth only when no Platform source is configured. Voice Call and Discord require Platform auth. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
   },
