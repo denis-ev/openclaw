@@ -127,6 +127,11 @@ export type RelaySession = {
   forcedTerminalProviderResults: Map<string, ForcedTerminalProviderResult>;
   // Turn cancellation invalidates async acceptance callbacks from the prior turn.
   toolResultEpoch: number;
+  // Agent admission can outlive the transport. Only an explicit turn cancel
+  // advances this generation so late starts remain detached but cancellable.
+  agentConsultCancellationGeneration: number;
+  // Provider clears can arrive after the local fallback has already retired an
+  // output. Keep their original generation so they cannot clear replacement audio.
   outputGeneration: number;
   activeOutputOwner?: RelayOutputOwner;
   clearedOutputGeneration?: number;

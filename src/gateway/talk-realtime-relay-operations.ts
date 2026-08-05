@@ -3,7 +3,6 @@ import {
   controlRealtimeVoiceAgentRun,
   type RealtimeVoiceAgentControlResult,
 } from "../talk/agent-run-control.js";
-import { registerClientVoiceConsultRun } from "../talk/client-voice-session.js";
 import type {
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceToolResultOptions,
@@ -41,10 +40,11 @@ import {
 } from "./talk-realtime-relay-state.js";
 import {
   bindRelaySessionKey,
+  captureRelayVoiceConsultOwner,
   closeRelayVoiceSession,
   enqueueRelayVoiceTranscript,
   ensureRelayVoiceSession,
-  resolveRelayAgentId,
+  registerRelayVoiceConsultRun,
 } from "./talk-realtime-relay-voice.js";
 import { decodeTalkRelayAudioBase64 } from "./talk-relay-audio-base64.js";
 import {
@@ -368,26 +368,12 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   if (callId && !session.toolCalls.tryAdmit([callId])) {
     throw new Error("Realtime relay tool-call session limit exceeded");
   }
-  if (!session.sessionKey) {
-    bindRelaySessionKey(session, params.sessionKey);
-  }
+  const owner = captureRelayVoiceConsultOwner(session, params.sessionKey);
+  registerRelayVoiceConsultRun(owner, params.runId);
   session.activeAgentRuns.set(params.runId, params.sessionKey);
   if (callId) {
     session.activeAgentToolCalls.set(callId, params.runId);
   }
-  if (!ensureRelayVoiceSession(session)) {
-    throw new Error("Realtime relay voice session could not be created for agent consult");
-  }
-  const voiceSessionKey = session.sessionKey;
-  if (!voiceSessionKey) {
-    throw new Error("Realtime relay voice session has no pinned session key");
-  }
-  registerClientVoiceConsultRun({
-    agentId: resolveRelayAgentId(session, voiceSessionKey),
-    sessionKey: voiceSessionKey,
-    voiceSessionId: session.id,
-    runId: params.runId,
-  });
 }
 
 /** Retires one provider-owned tool call and aborts its exact relay consult, if started. */
@@ -516,6 +502,7 @@ export function cancelTalkRealtimeRelayTurn(params: {
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
   session.toolResultEpoch += 1;
+  session.agentConsultCancellationGeneration += 1;
   session.forcedTerminalProviderResults.clear();
   const turnId = ensureRelayTurn(session);
   const reason = params.reason ?? "client-cancelled";

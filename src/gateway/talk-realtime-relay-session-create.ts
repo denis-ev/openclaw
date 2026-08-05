@@ -62,7 +62,9 @@ import {
 } from "./talk-realtime-relay-tool-call-ledger.js";
 import {
   closeRelayVoiceSession,
+  captureRelayVoiceConsultOwner,
   enqueueRelayVoiceTranscript,
+  registerRelayVoiceConsultRun,
 } from "./talk-realtime-relay-voice.js";
 import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
 
@@ -132,7 +134,8 @@ export function createTalkRealtimeRelaySession(
       ? resolveTalkSessionAgentId(params.cfg ?? params.context.getRuntimeConfig(), relaySessionKey)
       : undefined);
   const runAgentConsult = async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) => {
-    if (!getActiveRelay()) {
+    const relay = getActiveRelay();
+    if (!relay) {
       throw new Error("Realtime gateway-relay session is closed");
     }
     const runtimeConfig = params.cfg ?? params.context.getRuntimeConfig();
@@ -141,6 +144,8 @@ export function createTalkRealtimeRelaySession(
       throw new Error("Realtime gateway-relay agent consult requires a pinned session key");
     }
     const agentId = relayAgentId ?? resolveTalkSessionAgentId(runtimeConfig, sessionKey);
+    const voiceOwner = captureRelayVoiceConsultOwner(relay, sessionKey);
+    const cancellationGeneration = relay.agentConsultCancellationGeneration;
     consultAgentRuntime ??= createPluginRuntime().agent;
     const talkConfig = normalizeTalkSection(runtimeConfig.talk);
     return await consultRealtimeVoiceAgent({
@@ -161,12 +166,10 @@ export function createTalkRealtimeRelaySession(
       fastMode: talkConfig?.consultFastMode,
       abortSignal: signal,
       onRunStarted: ({ runId, sessionId, timeoutMs }) => {
-        registerTalkRealtimeRelayAgentRun({
-          relaySessionId,
-          connId: params.connId,
-          sessionKey,
-          runId,
-        });
+        signal?.throwIfAborted();
+        if (relay.agentConsultCancellationGeneration !== cancellationGeneration) {
+          throw new Error("Realtime relay agent consult was cancelled before run registration");
+        }
         const registration = registerChatAbortController({
           chatAbortControllers: params.context.chatAbortControllers,
           runId,
@@ -178,6 +181,15 @@ export function createTalkRealtimeRelaySession(
           controlUiVisible: false,
           kind: "chat-send",
         });
+        try {
+          registerRelayVoiceConsultRun(voiceOwner, runId);
+          if (getActiveRelay() === relay) {
+            relay.activeAgentRuns.set(runId, voiceOwner.sessionKey);
+          }
+        } catch (error) {
+          registration.cleanup();
+          throw error;
+        }
         return {
           abortSignal: registration.controller.signal,
           cleanup: registration.cleanup,
@@ -614,6 +626,7 @@ export function createTalkRealtimeRelaySession(
     pendingWorkingToolResults: new Map(),
     forcedTerminalProviderResults: new Map(),
     toolResultEpoch: 0,
+    agentConsultCancellationGeneration: 0,
     outputGeneration: 0,
     ...(params.cfg ? { voiceConfig: params.cfg } : {}),
     voiceSessionCreated: false,

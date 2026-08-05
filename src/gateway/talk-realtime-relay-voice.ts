@@ -1,9 +1,11 @@
+import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveTalkSessionAgentId } from "../talk/agent-target.js";
 import {
   appendRelayVoiceTranscript,
   closeRelayVoiceSessionRecord,
   createOrResumeClientVoiceSession,
+  registerClientVoiceConsultRun,
 } from "../talk/client-voice-session.js";
 import {
   normalizeVoiceTranscriptText,
@@ -12,6 +14,13 @@ import {
 import { drainingRelaySessions, type RelaySession } from "./talk-realtime-relay-state.js";
 
 const RELAY_TRANSCRIPT_RETRY_DELAYS_MS = [0, 500, 2_000] as const;
+
+type RelayVoiceConsultOwner = {
+  agentId: string;
+  sessionKey: string;
+  voiceSessionId: string;
+  config: OpenClawConfig;
+};
 
 function logRelayVoiceFailure(session: RelaySession, message: string, error: unknown): void {
   session.context.logGateway?.warn(`${message}: ${formatErrorMessage(error)}`);
@@ -36,7 +45,7 @@ export function bindRelaySessionKey(session: RelaySession, sessionKey: string): 
   }
 }
 
-export function resolveRelayAgentId(session: RelaySession, sessionKey: string): string {
+function resolveRelayAgentId(session: RelaySession, sessionKey: string): string {
   bindRelaySessionKey(session, sessionKey);
   if (!session.agentId) {
     throw new Error("Realtime relay session has no pinned agent owner");
@@ -65,6 +74,36 @@ export function ensureRelayVoiceSession(session: RelaySession): boolean {
     logRelayVoiceFailure(session, "realtime relay voice session create failed", error);
     return false;
   }
+}
+
+/** Capture durable consult ownership before async admission can outlive the relay. */
+export function captureRelayVoiceConsultOwner(
+  session: RelaySession,
+  sessionKey: string,
+): RelayVoiceConsultOwner {
+  if (!session.sessionKey) {
+    bindRelaySessionKey(session, sessionKey);
+  }
+  if (!ensureRelayVoiceSession(session) || !session.sessionKey) {
+    throw new Error("Realtime relay voice session could not be created for agent consult");
+  }
+  return {
+    agentId: resolveRelayAgentId(session, session.sessionKey),
+    sessionKey: session.sessionKey,
+    voiceSessionId: session.id,
+    config: session.voiceConfig ?? session.context.getRuntimeConfig(),
+  };
+}
+
+/** Bind an admitted run to its durable call even after transport-local teardown. */
+export function registerRelayVoiceConsultRun(owner: RelayVoiceConsultOwner, runId: string): void {
+  registerClientVoiceConsultRun({
+    agentId: owner.agentId,
+    sessionKey: owner.sessionKey,
+    voiceSessionId: owner.voiceSessionId,
+    runId,
+    config: owner.config,
+  });
 }
 
 export function enqueueRelayVoiceTranscript(

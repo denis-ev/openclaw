@@ -8,12 +8,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import {
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.js";
+import {
+  emitTrustedDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveClientVoiceRunBinding } from "../talk/client-voice-session.js";
@@ -24,6 +30,7 @@ import type {
   RealtimeVoiceBridgeCreateRequest,
 } from "../talk/provider-types.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { createChatRunState } from "./server-chat-state.js";
 import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-state.js";
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-ledger.js";
@@ -41,6 +48,17 @@ import {
   stopTalkRealtimeRelaySession as stopTalkRealtimeRelaySessionRaw,
   submitTalkRealtimeRelayToolResult,
 } from "./talk-realtime-relay.js";
+
+const { runEmbeddedAgent, sendDurableMessageBatch } = vi.hoisted(() => ({
+  runEmbeddedAgent: vi.fn(async (..._args: unknown[]) => ({
+    payloads: [{ text: "Done." }],
+    meta: {},
+  })),
+  sendDurableMessageBatch: vi.fn(async () => ({ status: "sent" })),
+}));
+
+vi.mock("../plugins/runtime/runtime-embedded-agent.runtime.js", () => ({ runEmbeddedAgent }));
+vi.mock("../channels/message/runtime.js", () => ({ sendDurableMessageBatch }));
 
 const activeRelaySessions = new Map<string, string>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -83,6 +101,11 @@ describe("talk realtime gateway relay", () => {
     );
     vi.useRealTimers();
     embeddedRunTesting.resetActiveEmbeddedRuns();
+    runEmbeddedAgent.mockReset().mockResolvedValue({
+      payloads: [{ text: "Done." }],
+      meta: {},
+    });
+    sendDurableMessageBatch.mockReset().mockResolvedValue({ status: "sent" });
   });
 
   function createIdleRelayProvider(): RealtimeVoiceProviderPlugin {
@@ -263,6 +286,226 @@ describe("talk realtime gateway relay", () => {
       closeOpenClawStateDatabaseForTest();
       envSnapshot.restore();
     }
+  });
+
+  it("binds an admitted consult after relay disconnect and delivers its mutation digest", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(tempDirs.make("openclaw-relay-admission-detach-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const sessionKey = "agent:main:main";
+    const sessionId = "session-relay-admission-detach";
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { default: true } } },
+    };
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      {
+        sessionId,
+        updatedAt: Date.now(),
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "discord", to: "channel:voice-updates" },
+        }),
+      },
+    );
+    const mutationStarted = createDeferredVoid();
+    const releaseMutation = createDeferredVoid();
+    const mutation = runExclusiveSessionLifecycleMutation({
+      scope: resolveStorePath(config.session?.store, { agentId: "main" }),
+      identities: [sessionKey, sessionId],
+      run: async () => {
+        mutationStarted.resolve();
+        await releaseMutation.promise;
+      },
+    });
+    await mutationStarted.promise;
+
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    let admittedRunId: string | undefined;
+    runEmbeddedAgent.mockImplementationOnce(async (...args: unknown[]) => {
+      const [rawParams] = args;
+      const runId =
+        typeof rawParams === "object" &&
+        rawParams !== null &&
+        "runId" in rawParams &&
+        typeof rawParams.runId === "string"
+          ? rawParams.runId
+          : undefined;
+      if (!runId) {
+        throw new Error("expected admitted embedded-agent run id");
+      }
+      admittedRunId = runId;
+      expect(resolveClientVoiceRunBinding(runId)).toMatchObject({
+        agentId: "main",
+        sessionKey,
+      });
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.started",
+        runId,
+        toolCallId: "call-detached",
+        toolName: "message",
+        mutatingAction: true,
+      });
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.completed",
+        runId,
+        toolCallId: "call-detached",
+        toolName: "message",
+        durationMs: 5,
+      });
+      emitTrustedDiagnosticEvent({
+        type: "run.completed",
+        runId,
+        durationMs: 5,
+        outcome: "completed",
+      });
+      return { payloads: [{ text: "Done." }], meta: {} };
+    });
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      bridgeRequest = request;
+      return createIdleRelayProvider().createBridge?.(request) as RealtimeVoiceBridge;
+    };
+    const chatAbortControllers = new Map();
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds: vi.fn(),
+        chatAbortControllers,
+        getRuntimeConfig: () => config,
+        logGateway: { warn: vi.fn() },
+      } as never,
+      connId: "conn-detached",
+      cfg: config,
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey,
+    });
+    const relay = relaySessions.get(session.relaySessionId);
+    const runAgentConsult = bridgeRequest?.runAgentConsult;
+    if (!relay || !runAgentConsult) {
+      throw new Error("expected relay consult bridge");
+    }
+
+    const consult = runAgentConsult({ prompt: "Ship it" });
+    expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toMatchObject({
+      status: "open",
+      consultRunIds: [],
+    });
+    closeTalkRealtimeRelaySessionsForConnection("conn-detached");
+    activeRelaySessions.delete(session.relaySessionId);
+    await relay.voiceSessionClose;
+    expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toMatchObject({
+      status: "closed",
+      consultRunIds: [],
+    });
+
+    releaseMutation.resolve();
+    await mutation;
+    await expect(consult).resolves.toEqual({ text: "Done." });
+    await waitForDiagnosticEventsDrained();
+
+    expect(admittedRunId).toEqual(expect.any(String));
+    expect(relaySessions.has(session.relaySessionId)).toBe(false);
+    expect(chatAbortControllers.size).toBe(0);
+    expect(resolveClientVoiceRunBinding(admittedRunId)).toBeUndefined();
+    expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
+    expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toMatchObject({
+      status: "closed",
+      consultRunIds: [admittedRunId],
+      effects: [
+        expect.objectContaining({
+          runId: admittedRunId,
+          toolName: "message",
+          status: "succeeded",
+        }),
+      ],
+      digestDeliveredAt: expect.any(Number),
+    });
+    envSnapshot.restore();
+  });
+
+  it("rejects a paused consult when the relay turn is cancelled before run registration", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(tempDirs.make("openclaw-relay-admission-cancel-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const sessionKey = "agent:main:main";
+    const sessionId = "session-relay-admission-cancel";
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { default: true } } },
+    };
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      { sessionId, updatedAt: Date.now() },
+    );
+    const mutationStarted = createDeferredVoid();
+    const releaseMutation = createDeferredVoid();
+    const mutation = runExclusiveSessionLifecycleMutation({
+      scope: resolveStorePath(config.session?.store, { agentId: "main" }),
+      identities: [sessionKey, sessionId],
+      run: async () => {
+        mutationStarted.resolve();
+        await releaseMutation.promise;
+      },
+    });
+    await mutationStarted.promise;
+
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      bridgeRequest = request;
+      return createIdleRelayProvider().createBridge?.(request) as RealtimeVoiceBridge;
+    };
+    const chatAbortControllers = new Map();
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds: vi.fn(),
+        chatAbortControllers,
+        getRuntimeConfig: () => config,
+        logGateway: { warn: vi.fn() },
+      } as never,
+      connId: "conn-cancelled",
+      cfg: config,
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey,
+    });
+    const relay = relaySessions.get(session.relaySessionId);
+    const runAgentConsult = bridgeRequest?.runAgentConsult;
+    if (!relay || !runAgentConsult) {
+      throw new Error("expected relay consult bridge");
+    }
+
+    const consult = runAgentConsult({ prompt: "Ship it" });
+    cancelTalkRealtimeRelayTurn({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-cancelled",
+      reason: "client-cancelled",
+    });
+    releaseMutation.resolve();
+    await mutation;
+
+    await expect(consult).rejects.toThrow(
+      "Realtime relay agent consult was cancelled before run registration",
+    );
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(chatAbortControllers.size).toBe(0);
+    expect(relay.activeAgentRuns.size).toBe(0);
+    expect(relay.agentConsultCancellationGeneration).toBe(1);
+    expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toMatchObject({
+      status: "open",
+      consultRunIds: [],
+      effects: [],
+    });
+
+    stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-cancelled",
+    });
+    await relay.voiceSessionClose;
+    envSnapshot.restore();
   });
 
   it("injects the host agent runner only into gateway-relay bridge creation", () => {
