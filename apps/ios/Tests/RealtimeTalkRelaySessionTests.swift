@@ -15,6 +15,20 @@ private final class UnusedPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     }
 }
 
+@MainActor
+private final class DrainingPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
+    func play(stream: AsyncThrowingStream<Data, Error>, sampleRate _: Double) async -> StreamingPlaybackResult {
+        do {
+            for try await _ in stream {}
+        } catch {}
+        return StreamingPlaybackResult(finished: true, interruptedAt: nil)
+    }
+
+    func stop() -> Double? {
+        nil
+    }
+}
+
 private actor RealtimeRelayStartupBarrier {
     private var entered = false
     private var enteredWaiter: CheckedContinuation<Void, Never>?
@@ -114,7 +128,7 @@ struct RealtimeTalkRelaySessionTests {
 
         session._test_markOutputPlaybackFinished()
         for _ in 0..<10 {
-            if !(await requests.snapshot()).isEmpty { break }
+            if await !(requests.snapshot()).isEmpty { break }
             await Task.yield()
         }
 
@@ -125,6 +139,64 @@ struct RealtimeTalkRelaySessionTests {
         let paramsData = try #require(request.paramsJSON?.data(using: .utf8))
         let params = try #require(JSONSerialization.jsonObject(with: paramsData) as? [String: String])
         #expect(params == ["sessionId": "relay-1", "markName": "audio-1"])
+    }
+
+    @Test func `output cancellation carries playback identity and ignores stale clear`() async throws {
+        let requests = RealtimeRelayStartupRequestLog()
+        var speakingStates: [Bool] = []
+        let transport = RealtimeTalkRelaySession.StartupTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { method, paramsJSON, _ in
+                await requests.record(method: method, paramsJSON: paramsJSON)
+                return Data("{\"ok\":true}".utf8)
+            })
+        let session = RealtimeTalkRelaySession(
+            gateway: GatewayNodeSession(),
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            pcmPlayer: DrainingPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { speakingStates.append($0) },
+            startupTransport: transport)
+        session._test_setRelaySessionId("relay-1")
+
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "audio",
+                "audioBase64": Data([0x01, 0x02]).base64EncodedString(),
+                "outputGeneration": 7,
+                "talkEvent": ["turnId": "turn-7"],
+            ]),
+            seq: nil,
+            stateversion: nil))
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "clear",
+                "outputGeneration": 6,
+            ]),
+            seq: nil,
+            stateversion: nil))
+        #expect(speakingStates == [true])
+
+        session.cancelOutput(reason: "barge-in")
+        for _ in 0..<10 {
+            if await !(requests.snapshot()).isEmpty { break }
+            await Task.yield()
+        }
+
+        let request = try #require(await requests.snapshot().first)
+        #expect(request.method == "talk.session.cancelOutput")
+        let paramsData = try #require(request.paramsJSON?.data(using: .utf8))
+        let params = try #require(JSONSerialization.jsonObject(with: paramsData) as? [String: Any])
+        #expect(params["sessionId"] as? String == "relay-1")
+        #expect(params["turnId"] as? String == "turn-7")
+        #expect(params["outputGeneration"] as? Int == 7)
+        #expect(params["reason"] as? String == "barge-in")
     }
 
     @Test func `close after classified error does not replace issue`() async {

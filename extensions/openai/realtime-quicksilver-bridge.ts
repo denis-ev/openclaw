@@ -12,6 +12,7 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   RealtimeVoiceSessionLifecycle,
   resamplePcm,
+  type RealtimeVoiceBargeInOptions,
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeCreateRequest,
   type RealtimeVoiceSessionConnection,
@@ -355,9 +356,9 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     return this.lifecycle.isReady() && this.socket?.readyState === WEBSOCKET_OPEN;
   }
 
-  handleBargeIn(): void {
+  handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
     // Frameless Bidi owns interruption from incoming audio and exposes no client cancel event.
-    this.config.onClearAudio("barge-in");
+    (options?.onClearAudio ?? this.config.onClearAudio)("barge-in");
   }
 
   private createSocketFactory(): OpenAIQuicksilverSocketFactory {

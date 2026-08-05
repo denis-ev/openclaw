@@ -85,6 +85,7 @@ function createHarness(params?: {
   const onError = vi.fn();
   const onClose = vi.fn();
   const onEvent = vi.fn();
+  const onClearAudio = vi.fn();
   const bridge = new OpenAIQuicksilverVoiceBridge({
     providerConfig: {},
     model: "gpt-live-1-boulder-alpha",
@@ -97,7 +98,7 @@ function createHarness(params?: {
     resolveAuth: params?.resolveAuth ?? (async () => ({ type: "api-key", token: "test-key" })),
     webSocketFactory,
     onAudio,
-    onClearAudio: vi.fn(),
+    onClearAudio,
     onTranscript,
     onToolCall,
     onReady,
@@ -109,6 +110,7 @@ function createHarness(params?: {
     bridge,
     connections,
     onAudio,
+    onClearAudio,
     onClose,
     onError,
     onEvent,
@@ -150,6 +152,16 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
 
     harness.bridge.close();
     await vi.waitFor(() => expect(harness.onClose).toHaveBeenCalledWith("completed"));
+  });
+
+  it("uses the request-scoped clear for manual playback cancellation", () => {
+    const harness = createHarness();
+    const requestClearAudio = vi.fn();
+
+    harness.bridge.handleBargeIn?.({ onClearAudio: requestClearAudio });
+
+    expect(requestClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(harness.onClearAudio).not.toHaveBeenCalled();
   });
 
   it("keeps repeated close idempotent while the transport is still open", async () => {

@@ -60,6 +60,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private cancelRequestedForPlayback = false;
   private playbackOverflowed = false;
   private playbackTurnId: string | undefined;
+  private playbackOutputGeneration: number | undefined;
   private pendingOutputCancellations = 0;
   private speechFramesDuringPlayback = 0;
   private lastRelayError: string | undefined;
@@ -326,12 +327,27 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
             if (turnId) {
               this.playbackTurnId = turnId;
             }
+            const outputGeneration = event.outputGeneration;
+            if (
+              typeof outputGeneration === "number" &&
+              Number.isSafeInteger(outputGeneration) &&
+              outputGeneration > 0
+            ) {
+              this.playbackOutputGeneration = outputGeneration;
+            }
             this.cancelRequestedForPlayback = false;
             this.speechFramesDuringPlayback = 0;
             this.playPcm16(event.audioBase64);
           }
           return;
         case "clear":
+          if (
+            event.outputGeneration !== undefined &&
+            this.playbackOutputGeneration !== undefined &&
+            event.outputGeneration !== this.playbackOutputGeneration
+          ) {
+            return;
+          }
           this.playbackOverflowed = false;
           this.stopOutput({ releaseDelayedToolResults: this.pendingOutputCancellations === 0 });
           if (event.talkEvent?.type === "turn.cancelled") {
@@ -400,6 +416,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private stopOutput(options: { releaseDelayedToolResults?: boolean } = {}): void {
     this.outputQueue.stop(this.outputContext);
     this.playbackTurnId = undefined;
+    this.playbackOutputGeneration = undefined;
     this.speechFramesDuringPlayback = 0;
     if (options.releaseDelayedToolResults ?? true) {
       this.flushDelayedToolResults();
@@ -682,11 +699,13 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.pendingOutputCancellations += 1;
     this.pauseDelayedToolResults();
     const turnId = this.playbackTurnId;
+    const outputGeneration = this.playbackOutputGeneration;
     this.stopOutput({ releaseDelayedToolResults: false });
     void this.ctx.client
       .request("talk.session.cancelOutput", {
         sessionId: this.session.relaySessionId,
         ...(turnId ? { turnId } : {}),
+        ...(outputGeneration ? { outputGeneration } : {}),
         reason,
       })
       .then(

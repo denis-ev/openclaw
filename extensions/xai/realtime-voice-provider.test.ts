@@ -910,6 +910,35 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     },
   );
 
+  it("uses the request-scoped clear for manual playback cancellation", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const onClearAudio = vi.fn();
+    const requestClearAudio = vi.fn();
+    const bridge = createTestBridge({
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onClearAudio,
+    });
+    const { socket } = await startRealtimeBridge(bridge);
+
+    socket.emitServer({ type: "response.created", response: { id: "resp_1" } });
+    bridge.setMediaTimestamp(1000);
+    socket.emitServer({
+      type: "response.output_audio.delta",
+      item_id: "item_1",
+      delta: Buffer.from("assistant audio").toString("base64"),
+    });
+    bridge.setMediaTimestamp(1300);
+
+    bridge.handleBargeIn?.({
+      audioPlaybackActive: true,
+      onClearAudio: requestClearAudio,
+    });
+
+    expect(requestClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(onClearAudio).not.toHaveBeenCalled();
+    bridge.close();
+  });
+
   it("terminates realtime voice on non-canonical base64 audio", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
     const onAudio = vi.fn();

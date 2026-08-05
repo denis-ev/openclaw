@@ -217,13 +217,21 @@ export function createTalkRealtimeRelaySession(
         broadcastRelayTurnStarted(relay, recorded.turn.event);
         if (recorded.outputAudioStarted) {
           relay.outputGeneration += 1;
-          broadcastEvent({ relaySessionId, type: "audioStarted" }, recorded.outputAudioStarted);
+          broadcastEvent(
+            {
+              relaySessionId,
+              type: "audioStarted",
+              outputGeneration: relay.outputGeneration,
+            },
+            recorded.outputAudioStarted,
+          );
         }
         broadcastEvent(
           {
             relaySessionId,
             type: "audio",
             audioBase64: audio.toString("base64"),
+            outputGeneration: relay.outputGeneration,
             ...(currentOutputItemId ? { itemId: currentOutputItemId } : {}),
             ...(currentOutputResponseId ? { responseId: currentOutputResponseId } : {}),
           },
@@ -235,11 +243,9 @@ export function createTalkRealtimeRelaySession(
         if (!relay) {
           return;
         }
-        const generation = relay.pendingProviderClearGeneration ?? relay.outputGeneration;
-        relay.pendingProviderClearGeneration = undefined;
         clearTalkRealtimeRelayOutputGeneration({
           session: relay,
-          generation,
+          generation: relay.outputGeneration,
           reason: reason ?? "clear",
           providerReason: reason,
         });
@@ -317,6 +323,7 @@ export function createTalkRealtimeRelaySession(
           {
             relaySessionId,
             type: "audioDone",
+            outputGeneration: relay.outputGeneration,
             ...((event.itemId ?? currentOutputItemId)
               ? { itemId: event.itemId ?? currentOutputItemId }
               : {}),

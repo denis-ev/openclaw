@@ -2675,9 +2675,10 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(onClose).toHaveBeenCalledWith("completed");
   });
 
-  it("truncates externally interrupted playback after an immediate mark acknowledgement", async () => {
+  it("uses the request-scoped clear for externally interrupted playback", async () => {
     const onAudio = vi.fn();
     const onClearAudio = vi.fn();
+    const requestClearAudio = vi.fn();
     const bridge = createNativeBridge({
       onAudio,
       onClearAudio,
@@ -2702,10 +2703,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
     bridge.setMediaTimestamp(1300);
 
-    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+    bridge.handleBargeIn?.({
+      audioPlaybackActive: true,
+      onClearAudio: requestClearAudio,
+    });
 
     expect(onAudio).toHaveBeenCalledTimes(1);
-    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(requestClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(onClearAudio).not.toHaveBeenCalled();
     expect(parseSent(socket).slice(-2)).toEqual([
       expectedResponseCancelEvent(),
       {

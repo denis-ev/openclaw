@@ -328,6 +328,7 @@ export const TalkSessionCancelTurnParamsSchema = closedObject({
 export const TalkSessionCancelOutputParamsSchema = closedObject({
   sessionId: NonEmptyString,
   turnId: Type.Optional(Type.String()),
+  outputGeneration: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
   reason: Type.Optional(Type.String()),
 });
 

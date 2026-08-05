@@ -451,6 +451,48 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeOutputIdentityPropagatesIntoCancelPayload() {
+    val event =
+      kotlinx.serialization.json.Json
+        .parseToJsonElement(
+          """{"type":"audio","outputGeneration":7,"talkEvent":{"turnId":"turn-7"}}""",
+        ) as kotlinx.serialization.json.JsonObject
+
+    val identity = parseRealtimeOutputIdentity(event)
+
+    assertEquals(RealtimeOutputIdentity(turnId = "turn-7", outputGeneration = 7L), identity)
+    assertEquals(
+      """{"sessionId":"relay-1","turnId":"turn-7","outputGeneration":7,"reason":"barge-in"}""",
+      buildRealtimeOutputCancellationParams("relay-1", "barge-in", identity),
+    )
+  }
+
+  @Test
+  fun staleRealtimeClearDoesNotStopReplacementPlayback() {
+    val manager = createManager()
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    setPrivateField(
+      manager,
+      "realtimePlaybackIdentity",
+      RealtimeOutputIdentity(turnId = "turn-2", outputGeneration = 2L),
+    )
+    setMutableStateFlow(manager, "_isSpeaking", true)
+
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear","outputGeneration":1}""")
+
+    assertTrue(manager.isSpeaking.value)
+    assertEquals(
+      RealtimeOutputIdentity(turnId = "turn-2", outputGeneration = 2L),
+      readPrivateField(manager, "realtimePlaybackIdentity"),
+    )
+
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear","outputGeneration":2}""")
+
+    assertFalse(manager.isSpeaking.value)
+    assertNull(readPrivateField(manager, "realtimePlaybackIdentity"))
+  }
+
+  @Test
   fun localizedOffStatusDoesNotBecomeRealtimeStartFailure() =
     runTest {
       val manager = createManager(scope = this)

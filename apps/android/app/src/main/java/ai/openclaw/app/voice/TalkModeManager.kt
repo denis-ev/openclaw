@@ -66,6 +66,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.longOrNull
 import java.io.IOException
 import java.util.LinkedHashMap
 import java.util.Locale
@@ -386,6 +387,8 @@ class TalkModeManager internal constructor(
 
   @Volatile private var pendingRealtimeOutputClear: CompletableDeferred<Unit>? = null
   private val realtimeOutputCancellationMutex = Mutex()
+
+  @Volatile private var realtimePlaybackIdentity: RealtimeOutputIdentity? = null
 
   @Volatile
   private var realtimePlaybackEndsAtMs = 0L
@@ -1347,12 +1350,23 @@ class TalkModeManager internal constructor(
             Log.w(tag, "realtime audio decode failed: ${err.message ?: err::class.simpleName}")
             return
           }
+        parseRealtimeOutputIdentity(obj)?.let { realtimePlaybackIdentity = it }
         playRealtimeAudio(bytes)
       }
       "clear" -> {
+        val clearGeneration = obj["outputGeneration"].asPositiveLongOrNull()
+        val playbackIdentity = realtimePlaybackIdentity
+        if (
+          clearGeneration != null &&
+          playbackIdentity?.outputGeneration != null &&
+          clearGeneration != playbackIdentity.outputGeneration
+        ) {
+          return
+        }
         val marks = takePendingRealtimePlaybackMarks()
         stopRealtimePlayback()
         acknowledgeRealtimePlaybackMarks(marks)
+        realtimePlaybackIdentity = null
         pendingRealtimeOutputClear?.complete(Unit)
       }
       "mark" -> {
@@ -1686,6 +1700,7 @@ class TalkModeManager internal constructor(
     realtimeOutputSuppressed = false
     pendingRealtimeOutputClear?.cancel()
     pendingRealtimeOutputClear = null
+    realtimePlaybackIdentity = null
     if (cancelCapture) {
       captureJobs.first?.cancel()
     }
@@ -1713,6 +1728,7 @@ class TalkModeManager internal constructor(
   }
 
   internal suspend fun pauseRealtimeCaptureForPushToTalk(captureId: String) {
+    val outputIdentity = realtimePlaybackIdentity
     val captureJobs =
       synchronized(realtimeCapturePauseLock) {
         val currentSessionId = realtimeSessionId
@@ -1729,7 +1745,7 @@ class TalkModeManager internal constructor(
     appendJob?.cancelAndJoin()
     // Stop input first so no frame can create new provider output while the
     // cancellation boundary is being established.
-    if (!cancelRealtimeOutput(reason = "android-push-to-talk")) {
+    if (!cancelRealtimeOutput(reason = "android-push-to-talk", identity = outputIdentity)) {
       Log.w(tag, "realtime output cancellation was not confirmed; closing relay")
       stopRealtimeRelay(preserveStatus = true)
       synchronized(realtimeCapturePauseLock) {
@@ -2905,28 +2921,33 @@ class TalkModeManager internal constructor(
 
   fun stopTts() {
     realtimeOutputSuppressed = true
+    val outputIdentity = realtimePlaybackIdentity
     stopRealtimePlayback()
-    scope.launch { cancelRealtimeOutput(reason = "android-stop-tts") }
+    scope.launch {
+      cancelRealtimeOutput(reason = "android-stop-tts", identity = outputIdentity)
+    }
     stopSpeaking(resetInterrupt = true)
     _isSpeaking.value = false
     setStatus(nativeText("Listening"))
   }
 
-  private suspend fun cancelRealtimeOutput(reason: String): Boolean =
+  private suspend fun cancelRealtimeOutput(
+    reason: String,
+    identity: RealtimeOutputIdentity?,
+  ): Boolean =
     realtimeOutputCancellationMutex.withLock {
       val sessionId = realtimeSessionId ?: return@withLock true
-      val clear = CompletableDeferred<Unit>()
-      pendingRealtimeOutputClear = clear
+      val pending = CompletableDeferred<Unit>()
+      pendingRealtimeOutputClear = pending
       try {
-        val params =
-          buildJsonObject {
-            put("sessionId", JsonPrimitive(sessionId))
-            put("reason", JsonPrimitive(reason))
-          }
-        requestGateway("talk.session.cancelOutput", params.toString(), timeoutMs = 5_000)
+        requestGateway(
+          "talk.session.cancelOutput",
+          buildRealtimeOutputCancellationParams(sessionId, reason, identity),
+          timeoutMs = 5_000,
+        )
         // The response confirms provider cancellation; clear confirms that the
         // old playback boundary reached Android before capture can resume.
-        withTimeout(2_000) { clear.await() }
+        withTimeout(2_000) { pending.await() }
         true
       } catch (err: TimeoutCancellationException) {
         Log.d(tag, "realtime cancelOutput unconfirmed: ${err.message ?: "timeout"}")
@@ -2939,7 +2960,7 @@ class TalkModeManager internal constructor(
         Log.d(tag, "realtime cancelOutput failed: ${err.message ?: err::class.simpleName}")
         false
       } finally {
-        if (pendingRealtimeOutputClear === clear) {
+        if (pendingRealtimeOutputClear === pending) {
           pendingRealtimeOutputClear = null
         }
       }
@@ -3320,9 +3341,44 @@ class TalkModeManager internal constructor(
   private fun acceptRecognitionCallback(captureId: String?): Boolean = captureId == activePttCaptureId
 }
 
+internal data class RealtimeOutputIdentity(
+  val turnId: String?,
+  val outputGeneration: Long?,
+)
+
+internal fun parseRealtimeOutputIdentity(event: JsonObject): RealtimeOutputIdentity? {
+  val turnId =
+    event["talkEvent"]
+      .asObjectOrNull()
+      ?.get("turnId")
+      .asStringOrNull()
+      ?.trim()
+      ?.takeIf(String::isNotEmpty)
+  val outputGeneration = event["outputGeneration"].asPositiveLongOrNull()
+  return if (turnId != null || outputGeneration != null) {
+    RealtimeOutputIdentity(turnId = turnId, outputGeneration = outputGeneration)
+  } else {
+    null
+  }
+}
+
+internal fun buildRealtimeOutputCancellationParams(
+  sessionId: String,
+  reason: String,
+  identity: RealtimeOutputIdentity?,
+): String =
+  buildJsonObject {
+    put("sessionId", JsonPrimitive(sessionId))
+    identity?.turnId?.let { put("turnId", JsonPrimitive(it)) }
+    identity?.outputGeneration?.let { put("outputGeneration", JsonPrimitive(it)) }
+    put("reason", JsonPrimitive(reason))
+  }.toString()
+
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
 private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+private fun JsonElement?.asPositiveLongOrNull(): Long? = (this as? JsonPrimitive)?.longOrNull?.takeIf { it > 0L }
 
 private fun JsonElement?.asDoubleOrNull(): Double? {
   val primitive = this as? JsonPrimitive ?: return null

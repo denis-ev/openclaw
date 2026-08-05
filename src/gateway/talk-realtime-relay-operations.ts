@@ -4,7 +4,10 @@ import {
   type RealtimeVoiceAgentControlResult,
 } from "../talk/agent-run-control.js";
 import { registerClientVoiceConsultRun } from "../talk/client-voice-session.js";
-import type { RealtimeVoiceToolResultOptions } from "../talk/provider-types.js";
+import type {
+  RealtimeVoiceAudioClearReason,
+  RealtimeVoiceToolResultOptions,
+} from "../talk/provider-types.js";
 import type { TalkEvent } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
 import { formatError } from "./server-utils.js";
@@ -545,6 +548,7 @@ export function cancelTalkRealtimeRelayOutput(params: {
   relaySessionId: string;
   connId: string;
   turnId?: string;
+  outputGeneration?: number;
   reason?: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
@@ -553,16 +557,23 @@ export function cancelTalkRealtimeRelayOutput(params: {
   if (requestedTurnId && requestedTurnId !== activeTurnId) {
     return;
   }
+  const outputGeneration = params.outputGeneration ?? session.outputGeneration;
+  if (outputGeneration !== session.outputGeneration) {
+    return;
+  }
   const reason = params.reason ?? "output-cancelled";
-  const outputGeneration = session.outputGeneration;
-  session.pendingProviderClearGeneration = outputGeneration;
-  session.harness.handleBargeIn({ audioPlaybackActive: true }, () => {
+  const clearOutput = (providerReason?: RealtimeVoiceAudioClearReason): void => {
     clearTalkRealtimeRelayOutputGeneration({
       session,
       generation: outputGeneration,
       reason,
+      ...(providerReason ? { providerReason } : {}),
     });
-  });
+  };
+  session.harness.handleBargeIn(
+    { audioPlaybackActive: true, onClearAudio: clearOutput },
+    clearOutput,
+  );
 }
 
 /** Drops one provider generation without sending cancellation into its replacement. */

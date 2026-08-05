@@ -28,16 +28,28 @@ export const noFallbackRelayOutputFlush = () => {};
 export type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
   | { relaySessionId: string; type: "inputAudio"; byteLength: number }
-  | { relaySessionId: string; type: "audioStarted" }
+  | { relaySessionId: string; type: "audioStarted"; outputGeneration: number }
   | {
       relaySessionId: string;
       type: "audio";
       audioBase64: string;
+      outputGeneration: number;
       itemId?: string;
       responseId?: string;
     }
-  | { relaySessionId: string; type: "audioDone"; itemId?: string; responseId?: string }
-  | { relaySessionId: string; type: "clear"; reason?: RealtimeVoiceAudioClearReason }
+  | {
+      relaySessionId: string;
+      type: "audioDone";
+      outputGeneration: number;
+      itemId?: string;
+      responseId?: string;
+    }
+  | {
+      relaySessionId: string;
+      type: "clear";
+      outputGeneration?: number;
+      reason?: RealtimeVoiceAudioClearReason;
+    }
   | { relaySessionId: string; type: "mark"; markName: string }
   | {
       relaySessionId: string;
@@ -110,11 +122,8 @@ export type RelaySession = {
   forcedTerminalProviderResults: Map<string, ForcedTerminalProviderResult>;
   // Turn cancellation invalidates async acceptance callbacks from the prior turn.
   toolResultEpoch: number;
-  // Provider clears can arrive after the local fallback has already retired an
-  // output. Keep their original generation so they cannot clear replacement audio.
   outputGeneration: number;
   clearedOutputGeneration?: number;
-  pendingProviderClearGeneration?: number;
   voiceConfig?: OpenClawConfig;
   voiceSessionCreated: boolean;
   voiceTranscriptSeq: number;
@@ -218,6 +227,7 @@ export function clearTalkRealtimeRelayOutputGeneration(params: {
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "clear",
+    outputGeneration: generation,
     ...(params.providerReason ? { reason: params.providerReason } : {}),
     ...(outputDone ? { talkEvent: outputDone } : {}),
   });
