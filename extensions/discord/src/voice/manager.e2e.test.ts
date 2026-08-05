@@ -2647,6 +2647,7 @@ describe("DiscordVoiceManager", () => {
       "provider resolve options",
     );
     expect(providerOptions.configuredProviderId).toBe("openai");
+    expect(providerOptions.agentId).toBe("agent-1");
     expect(providerOptions.defaultModel).toBe("gpt-realtime-2");
     expect(providerOptions.providerConfigOverrides).toEqual({
       model: "gpt-realtime-2",
@@ -2654,6 +2655,7 @@ describe("DiscordVoiceManager", () => {
     });
     const bridgeParams = lastRealtimeBridgeParams();
     expect(bridgeParams?.cfg).toBe(cfg);
+    expect(bridgeParams?.agentId).toBe("agent-1");
     expect(bridgeParams?.autoRespondToAudio).toBe(false);
     expect(bridgeParams?.instructions).toContain("same OpenClaw agent");
     expect(bridgeParams?.instructions).toContain("short natural backchannel");

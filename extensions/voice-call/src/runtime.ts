@@ -62,6 +62,7 @@ type Logger = {
 };
 
 type ResolvedRealtimeProvider = ResolvedRealtimeVoiceProvider;
+type ResolveRealtimeProvider = (agentId: string) => ResolvedRealtimeProvider;
 
 const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
   "You are the configured OpenClaw agent receiving delegated requests from a live phone voice bridge.",
@@ -229,16 +230,18 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
   }
 }
 
-async function resolveRealtimeProvider(params: {
+async function createRealtimeProviderResolver(params: {
   config: VoiceCallConfig;
   fullConfig: OpenClawConfig;
-}): Promise<ResolvedRealtimeProvider> {
+}): Promise<ResolveRealtimeProvider> {
   const { resolveConfiguredRealtimeVoiceProvider } = await loadRealtimeVoiceRuntime();
-  return resolveConfiguredRealtimeVoiceProvider({
-    configuredProviderId: params.config.realtime.provider,
-    providerConfigs: params.config.realtime.providers,
-    cfg: params.fullConfig,
-  });
+  return (agentId) =>
+    resolveConfiguredRealtimeVoiceProvider({
+      configuredProviderId: params.config.realtime.provider,
+      providerConfigs: params.config.realtime.providers,
+      cfg: params.fullConfig,
+      agentId,
+    });
 }
 
 function listRealtimeAgentIds(config: VoiceCallConfig, coreConfig: OpenClawConfig): string[] {
@@ -252,6 +255,22 @@ function listRealtimeAgentIds(config: VoiceCallConfig, coreConfig: OpenClawConfi
     }
   }
   return [...agentIds];
+}
+
+function requireConfiguredRealtimeProvider(params: {
+  agentIds: string[];
+  resolveProvider: ResolveRealtimeProvider;
+}): void {
+  let firstError: unknown;
+  for (const agentId of params.agentIds) {
+    try {
+      params.resolveProvider(agentId);
+      return;
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  throw firstError ?? new Error("No configured realtime voice provider registered");
 }
 
 async function createRealtimeInstructionsResolver(params: {
@@ -347,12 +366,18 @@ export async function createVoiceCallRuntime(params: {
     setVoiceCallStateRuntime({ state: stateRuntime });
   }
   const manager = new CallManager(config, undefined, cfg.session);
-  const realtimeProvider = config.realtime.enabled
-    ? await resolveRealtimeProvider({
+  const resolveRealtimeProvider = config.realtime.enabled
+    ? await createRealtimeProviderResolver({
         config,
         fullConfig: cfg,
       })
     : null;
+  if (resolveRealtimeProvider) {
+    requireConfiguredRealtimeProvider({
+      agentIds: listRealtimeAgentIds(config, cfg),
+      resolveProvider: resolveRealtimeProvider,
+    });
+  }
   const webhookServer = new VoiceCallWebhookServer(
     config,
     manager,
@@ -362,7 +387,7 @@ export async function createVoiceCallRuntime(params: {
     agentRuntime,
     log,
   );
-  if (realtimeProvider) {
+  if (resolveRealtimeProvider) {
     const { RealtimeCallHandler } = await loadRealtimeHandler();
     const resolveRealtimeInstructions = await createRealtimeInstructionsResolver({
       config,
@@ -380,11 +405,18 @@ export async function createVoiceCallRuntime(params: {
       realtimeConfig,
       manager,
       provider,
-      realtimeProvider.provider,
-      realtimeProvider.providerConfig,
+      (call) => {
+        const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
+        const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
+        const agentId = resolveCallAgentId(call, effectiveConfig);
+        return {
+          ...resolveRealtimeProvider(agentId),
+          agentId,
+          instructions: resolveRealtimeInstructions(call),
+        };
+      },
       config.serve.path,
       cfg,
-      resolveRealtimeInstructions,
     );
     if (config.realtime.toolPolicy !== "none") {
       realtimeHandler.registerToolHandler(
@@ -517,14 +549,15 @@ export async function createVoiceCallRuntime(params: {
       );
     }
 
+    const realtimeHandler = webhookServer.getRealtimeHandler();
+
     if (publicUrl) {
       provider.setPublicUrl?.(publicUrl);
     }
-    if (publicUrl && realtimeProvider) {
-      webhookServer.getRealtimeHandler()?.setPublicUrl(publicUrl);
+    if (publicUrl && realtimeHandler) {
+      realtimeHandler.setPublicUrl(publicUrl);
     }
 
-    const realtimeHandler = webhookServer.getRealtimeHandler();
     if (realtimeHandler) {
       manager.streamSessionIssuer = (request) => realtimeHandler.issueStreamSession(request);
     }
@@ -555,8 +588,8 @@ export async function createVoiceCallRuntime(params: {
       }
     }
 
-    if (realtimeProvider) {
-      log.info(`[voice-call] Realtime voice provider: ${realtimeProvider.provider.id}`);
+    if (realtimeHandler) {
+      log.info("[voice-call] Realtime voice enabled");
     }
 
     await manager.initialize(provider, webhookUrl);

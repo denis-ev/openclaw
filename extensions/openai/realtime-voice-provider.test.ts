@@ -914,6 +914,32 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
   });
 
+  it("checks Platform readiness in the selected agent auth store", () => {
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ agentDir, profileTypes }: { agentDir?: string; profileTypes?: readonly string[] }) =>
+        agentDir === "/tmp/openclaw-agent-voice" && profileTypes?.includes("api_key") === true,
+    );
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const cfg = {
+      agents: {
+        list: [
+          { id: "main", agentDir: "/tmp/openclaw-agent-main" },
+          { id: "voice", agentDir: "/tmp/openclaw-agent-voice" },
+        ],
+      },
+    } as never;
+    const providerConfig = { model: "gpt-live-1-boulder-alpha" };
+
+    expect(provider.isConfigured({ cfg, agentId: "voice", providerConfig })).toBe(true);
+    expect(provider.isConfigured({ cfg, agentId: "main", providerConfig })).toBe(false);
+
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ profileTypes }: { profileTypes?: readonly string[] }) =>
+        profileTypes?.includes("oauth") === true,
+    );
+    expect(provider.isConfigured({ cfg, agentId: "voice", providerConfig })).toBe(false);
+  });
+
   it("routes gpt-live Platform sessions through the native quicksilver broker", async () => {
     const createBrowserSession = vi.fn(async (_request: unknown, _auth: unknown) => ({
       provider: "openai",

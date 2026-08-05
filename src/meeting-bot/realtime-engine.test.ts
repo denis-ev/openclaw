@@ -34,7 +34,7 @@ async function createEngineFixture(options?: {
   const provider: RealtimeVoiceProviderPlugin = {
     id: "test",
     label: "Test",
-    isConfigured: () => true,
+    isConfigured: ({ agentId }) => agentId === "meeting-agent",
     createBridge: (request) => {
       callbacks = request;
       return bridge;
@@ -65,6 +65,7 @@ async function createEngineFixture(options?: {
     config: {
       chrome: { audioFormat: "pcm16-24khz" },
       realtime: {
+        agentId: "meeting-agent",
         strategy: "bidi",
         provider: "test",
         providers: { test: {} },
@@ -94,6 +95,7 @@ async function createEngineFixture(options?: {
     throw new Error("Expected realtime voice bridge callbacks");
   }
   const bridgeCallbacks = callbacks;
+  expect(bridgeCallbacks.agentId).toBe("meeting-agent");
   return {
     beginOutput,
     callbacks: bridgeCallbacks,

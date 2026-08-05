@@ -122,6 +122,7 @@ export type CreateTalkRealtimeRelaySessionParams = {
   context: GatewayRequestContext;
   connId: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
   instructions: string;

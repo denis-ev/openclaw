@@ -120,9 +120,11 @@ export function createTalkRealtimeRelaySession(
   };
   let consultAgentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
   const relaySessionKey = params.sessionKey?.trim();
-  const relayAgentId = relaySessionKey
-    ? resolveTalkSessionAgentId(params.cfg ?? params.context.getRuntimeConfig(), relaySessionKey)
-    : undefined;
+  const relayAgentId =
+    params.agentId ??
+    (relaySessionKey
+      ? resolveTalkSessionAgentId(params.cfg ?? params.context.getRuntimeConfig(), relaySessionKey)
+      : undefined);
   const runAgentConsult = async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) => {
     if (!getActiveRelay()) {
       throw new Error("Realtime gateway-relay session is closed");
@@ -184,13 +186,13 @@ export function createTalkRealtimeRelaySession(
     createBridge: (request: Parameters<typeof params.provider.createBridge>[0]) =>
       params.provider.createBridge({
         ...request,
-        ...(relayAgentId ? { agentId: relayAgentId } : {}),
         runAgentConsult,
       }),
   };
   const bridge = harness.createBridge({
     provider: relayProvider,
     cfg: params.cfg,
+    agentId: relayAgentId,
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,

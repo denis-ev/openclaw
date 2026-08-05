@@ -277,6 +277,7 @@ describe("talk realtime gateway relay", () => {
         logGateway: { warn: vi.fn() },
       } as never,
       connId: "conn-runner",
+      agentId: "support",
       provider,
       providerConfig: {},
       instructions: "brief",
@@ -285,7 +286,7 @@ describe("talk realtime gateway relay", () => {
     });
 
     expect(bridgeRequest?.runAgentConsult).toEqual(expect.any(Function));
-    expect(bridgeRequest?.agentId).toBe("main");
+    expect(bridgeRequest?.agentId).toBe("support");
     stopTalkRealtimeRelaySession({
       relaySessionId: session.relaySessionId,
       connId: "conn-runner",

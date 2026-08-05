@@ -93,6 +93,28 @@ describe("realtime voice bridge session runtime", () => {
     );
   });
 
+  it("passes the selected agent to the provider bridge", () => {
+    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (nextRequest) => {
+        request = nextRequest;
+        return makeBridge();
+      },
+    };
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      agentId: "voice-agent",
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    expect(expectBridgeRequest(request).agentId).toBe("voice-agent");
+  });
+
   it("passes the audio auto-response preference to the provider bridge", () => {
     let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const provider: RealtimeVoiceProviderPlugin = {

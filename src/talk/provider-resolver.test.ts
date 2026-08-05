@@ -76,6 +76,27 @@ describe("realtime voice provider resolver", () => {
     });
   });
 
+  it("passes the selected agent to public provider readiness", () => {
+    const isConfigured = vi.fn(({ agentId }: { agentId?: string }) => agentId === "voice-agent");
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "agent-scoped",
+      label: "Agent scoped",
+      isConfigured,
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
+
+    expect(
+      resolveConfiguredRealtimeVoiceProvider({
+        agentId: "voice-agent",
+        configuredProviderId: provider.id,
+        providers: [provider],
+      }).provider,
+    ).toBe(provider);
+    expect(isConfigured).toHaveBeenCalledWith(expect.objectContaining({ agentId: "voice-agent" }));
+  });
+
   it("keeps browser-only providers out of bridge auto-selection", () => {
     const isBrowserSessionConfigured = vi.fn(
       ({ agentId }: { agentId?: string }) => agentId === "voice-agent",

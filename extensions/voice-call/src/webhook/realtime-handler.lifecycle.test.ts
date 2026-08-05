@@ -58,6 +58,12 @@ function createBridge(
 function createCarrierLifecycleHarness(
   createBridgeForCall: RealtimeVoiceProviderPlugin["createBridge"],
 ) {
+  const realtimeProvider: RealtimeVoiceProviderPlugin = {
+    id: "openai",
+    label: "OpenAI",
+    isConfigured: () => true,
+    createBridge: createBridgeForCall,
+  };
   const call: CallRecord = {
     callId: "call-startup",
     providerCallId: "CA-startup",
@@ -79,13 +85,12 @@ function createCarrierLifecycleHarness(
       getCallByProviderCallId: vi.fn(() => call),
     } as unknown as CallManager,
     { name: "twilio", hangupCall } as unknown as VoiceCallProvider,
-    {
-      id: "openai",
-      label: "OpenAI",
-      isConfigured: () => true,
-      createBridge: createBridgeForCall,
-    },
-    { apiKey: "test-key" },
+    () => ({
+      agentId: "main",
+      instructions: "Be helpful.",
+      provider: realtimeProvider,
+      providerConfig: { apiKey: "test-key" },
+    }),
     "/voice/webhook",
   );
   return { call, handler, hangupCall, processEvent };
@@ -299,13 +304,17 @@ describe("RealtimeCallHandler lifecycle", () => {
         stopListening: vi.fn(),
         getCallStatus: vi.fn(),
       } as unknown as VoiceCallProvider,
-      {
-        id: "openai",
-        label: "OpenAI",
-        isConfigured: () => true,
-        createBridge: createBridgeForCall,
-      },
-      { apiKey: "test-key" },
+      () => ({
+        agentId: "main",
+        instructions: "Be helpful.",
+        provider: {
+          id: "openai",
+          label: "OpenAI",
+          isConfigured: () => true,
+          createBridge: createBridgeForCall,
+        },
+        providerConfig: { apiKey: "test-key" },
+      }),
       "/voice/webhook",
     );
     const { streamUrl } = handler.issueStreamSession();
@@ -414,13 +423,17 @@ describe("RealtimeCallHandler lifecycle", () => {
         stopListening: vi.fn(),
         getCallStatus: vi.fn(),
       } as unknown as VoiceCallProvider,
-      {
-        id: "openai",
-        label: "OpenAI",
-        isConfigured: () => true,
-        createBridge: createBridgeForCall,
-      },
-      { apiKey: "test-key" },
+      () => ({
+        agentId: "main",
+        instructions: "Be helpful.",
+        provider: {
+          id: "openai",
+          label: "OpenAI",
+          isConfigured: () => true,
+          createBridge: createBridgeForCall,
+        },
+        providerConfig: { apiKey: "test-key" },
+      }),
       "/voice/webhook",
     );
     const { streamUrl } = handler.issueStreamSession();
@@ -507,13 +520,17 @@ describe("RealtimeCallHandler lifecycle", () => {
         stopListening: vi.fn(),
         getCallStatus: vi.fn(),
       } as unknown as VoiceCallProvider,
-      {
-        id: "openai",
-        label: "OpenAI",
-        isConfigured: () => true,
-        createBridge: createBridgeForCall,
-      },
-      { apiKey: "test-key" },
+      () => ({
+        agentId: "main",
+        instructions: "Be helpful.",
+        provider: {
+          id: "openai",
+          label: "OpenAI",
+          isConfigured: () => true,
+          createBridge: createBridgeForCall,
+        },
+        providerConfig: { apiKey: "test-key" },
+      }),
       "/voice/webhook",
     );
     const consult = vi.fn(async () => ({ text: "This should not run." }));
@@ -628,13 +645,17 @@ describe("RealtimeCallHandler lifecycle", () => {
         stopListening: vi.fn(),
         getCallStatus: vi.fn(),
       } as unknown as VoiceCallProvider,
-      {
-        id: "openai",
-        label: "OpenAI",
-        isConfigured: () => true,
-        createBridge: createBridgeForCall,
-      },
-      { apiKey: "test-key" },
+      () => ({
+        agentId: "main",
+        instructions: "Be helpful.",
+        provider: {
+          id: "openai",
+          label: "OpenAI",
+          isConfigured: () => true,
+          createBridge: createBridgeForCall,
+        },
+        providerConfig: { apiKey: "test-key" },
+      }),
       "/voice/webhook",
     );
     handler.registerToolHandler("openclaw_agent_consult", async (_args, _callId, context) => {

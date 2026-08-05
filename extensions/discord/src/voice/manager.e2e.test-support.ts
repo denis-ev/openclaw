@@ -42,6 +42,7 @@ export type TestRealtimeBridgeParams = {
   audioSink?: { sendAudio: (audio: Buffer) => void };
   autoRespondToAudio?: boolean;
   cfg?: unknown;
+  agentId?: string;
   instructions?: string;
   interruptResponseOnInputAudio?: boolean;
   onEvent?: (event: { detail?: string; direction: "client" | "server"; type: string }) => void;

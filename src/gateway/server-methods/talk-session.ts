@@ -314,14 +314,12 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         const sessionKey =
           realtimeContext.requestedSessionKey ??
           buildAgentMainSessionKey({ agentId: realtimeContext.agentId });
-        await ensureClientVoiceAgentSessionEntry({
-          agentId: realtimeContext.agentId,
-          sessionKey,
-        });
+        await ensureClientVoiceAgentSessionEntry({ agentId: realtimeContext.agentId, sessionKey });
         const session = createTalkRealtimeRelaySession({
           context,
           connId,
           cfg: runtimeConfig,
+          agentId: realtimeContext.agentId,
           provider: resolution.provider,
           providerConfig: relayLaunch.providerConfig,
           instructions: buildRealtimeInstructions(realtimeContext.instructions),

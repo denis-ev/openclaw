@@ -256,9 +256,16 @@ export type StreamSession = {
 
 type CallRegistration = {
   callId: string;
+  agentId: string;
   instructions: string;
   initialGreetingInstructions?: string;
+  provider: RealtimeVoiceProviderPlugin;
+  providerConfig: RealtimeVoiceProviderConfig;
 };
+
+type ResolveRealtimeCallRegistration = (
+  call: CallRecord,
+) => Omit<CallRegistration, "callId" | "initialGreetingInstructions">;
 
 type ActiveRealtimeVoiceBridge = RealtimeVoiceBridgeSession;
 
@@ -371,11 +378,9 @@ export class RealtimeCallHandler {
     private readonly config: VoiceCallRealtimeConfig,
     private readonly manager: CallManager,
     private readonly provider: VoiceCallProvider,
-    private readonly realtimeProvider: RealtimeVoiceProviderPlugin,
-    private readonly providerConfig: RealtimeVoiceProviderConfig,
+    private readonly resolveCallRegistration: ResolveRealtimeCallRegistration,
     private readonly servePath: string,
     private readonly coreConfig?: OpenClawConfig,
-    private readonly resolveInstructions?: (call: CallRecord) => string,
   ) {}
 
   setPublicUrl(url: string): void {
@@ -654,7 +659,14 @@ export class RealtimeCallHandler {
       return null;
     }
 
-    const { callId, instructions, initialGreetingInstructions } = registration;
+    const {
+      callId,
+      agentId,
+      instructions,
+      initialGreetingInstructions,
+      provider: realtimeProvider,
+      providerConfig,
+    } = registration;
     const callRecord = this.manager.getCallByProviderCallId(callSid);
     const harness = createRealtimeVoiceSessionHarness({
       talk: {
@@ -662,7 +674,7 @@ export class RealtimeCallHandler {
         mode: "realtime",
         transport: "gateway-relay",
         brain: "agent-consult",
-        provider: this.realtimeProvider.id,
+        provider: realtimeProvider.id,
       },
       talkPayloads: {
         turnStarted: () => ({ callId, providerCallId: callSid }),
@@ -675,7 +687,7 @@ export class RealtimeCallHandler {
       onTalkEvent: (event) => appendRecentTalkEventMetadata(callRecord, event),
     });
     let providerHandlesInputAudioBargeIn =
-      this.realtimeProvider.capabilities?.handlesInputAudioBargeIn === true;
+      realtimeProvider.capabilities?.handlesInputAudioBargeIn === true;
     const cancelOutputAudioForBargeIn = (
       source: "local" | "provider",
       interruptProvider?: (audioPlaybackActive: boolean) => void,
@@ -779,8 +791,8 @@ export class RealtimeCallHandler {
       silenceFrames: 12,
     });
     const interruptResponseOnInputAudio =
-      typeof this.providerConfig.interruptResponseOnInputAudio === "boolean"
-        ? this.providerConfig.interruptResponseOnInputAudio
+      typeof providerConfig.interruptResponseOnInputAudio === "boolean"
+        ? providerConfig.interruptResponseOnInputAudio
         : undefined;
     const hadPredecessorOnAdmission = this.activeBridgesByCallId.has(callId);
     // Providers may close synchronously before createBridge returns; no consult can exist yet.
@@ -790,9 +802,10 @@ export class RealtimeCallHandler {
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
     const userTranscriptOwner = userTranscriptAdoption.owner;
     const bridgeParams: Parameters<typeof harness.createBridge>[0] = {
-      provider: this.realtimeProvider,
+      provider: realtimeProvider,
       cfg: this.coreConfig,
-      providerConfig: this.providerConfig,
+      agentId,
+      providerConfig,
       interruptResponseOnInputAudio,
       instructions,
       tools: this.config.tools,
@@ -1592,8 +1605,10 @@ export class RealtimeCallHandler {
       ...baseFields,
     });
 
-    const instructions = this.resolveInstructions?.(callRecord) ?? this.config.instructions;
+    const registration = this.resolveCallRegistration(callRecord);
+    const instructions = registration.instructions;
     return {
+      ...registration,
       callId: callRecord.callId,
       instructions,
       initialGreetingInstructions: buildGreetingInstructions(instructions, initialGreeting),

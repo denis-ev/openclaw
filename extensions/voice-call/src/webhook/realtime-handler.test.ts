@@ -124,6 +124,8 @@ function makeHandler(
     providers: overrides?.providers ?? {},
     ...(overrides?.provider ? { provider: overrides.provider } : {}),
   };
+  const realtimeProvider = deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge());
+  const providerConfig = deps?.providerConfig ?? { apiKey: "test-key" };
   return new RealtimeCallHandler(
     config,
     {
@@ -144,11 +146,14 @@ function makeHandler(
       getCallStatus: vi.fn(),
       ...deps?.provider,
     } as unknown as VoiceCallProvider,
-    deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge()),
-    deps?.providerConfig ?? { apiKey: "test-key" },
+    (call) => ({
+      agentId: call.agentId ?? "main",
+      instructions: deps?.resolveInstructions?.(call) ?? config.instructions,
+      provider: realtimeProvider,
+      providerConfig,
+    }),
     "/voice/webhook",
     undefined,
-    deps?.resolveInstructions,
   );
 }
 
@@ -519,6 +524,7 @@ describe("RealtimeCallHandler path routing", () => {
             agentId: "support",
           }),
         );
+        expect(createBridge.mock.calls[0]?.[0].agentId).toBe("support");
         expect(createBridge.mock.calls[0]?.[0].instructions).toBe("instructions:support");
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {

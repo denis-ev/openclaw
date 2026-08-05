@@ -56,6 +56,7 @@ export type RealtimeVoiceBridgeSession = {
 export type RealtimeVoiceBridgeSessionParams = {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
+  agentId?: string;
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
@@ -162,6 +163,7 @@ export function createRealtimeVoiceBridgeSession(
   };
   const bridge = params.provider.createBridge({
     cfg: params.cfg,
+    agentId: params.agentId,
     providerConfig: params.providerConfig,
     audioFormat: params.audioFormat,
     instructions: params.instructions,

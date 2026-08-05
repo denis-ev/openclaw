@@ -2026,7 +2026,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
     autoSelectOrder: 10,
     capabilities: OPENAI_REALTIME_CAPABILITIES,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ cfg, providerConfig }) => {
+    isConfigured: ({ cfg, agentId, providerConfig }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (isOpenAIGptLiveModel(config.model) && !isSupportedOpenAIGptLiveModel(config.model)) {
         return false;
@@ -2038,6 +2038,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
         hasOpenAIRealtimePlatformAuthInput({
           configuredApiKey: config.apiKey,
           cfg,
+          agentId,
         })
       ) {
         return true;
