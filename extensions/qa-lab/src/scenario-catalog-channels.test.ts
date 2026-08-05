@@ -91,7 +91,7 @@ describe("qa scenario catalog channel contracts", () => {
       ),
     );
 
-    expect(moduleScenarios).toHaveLength(144);
+    expect(moduleScenarios).toHaveLength(143);
     expect(
       moduleScenarios.every(
         (scenario) =>
