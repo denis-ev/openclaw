@@ -55,7 +55,7 @@ describe("GPT-Live call creation", () => {
       "thread-id": "api-key-thread",
       "x-session-id": "api-key-realtime",
     });
-    expect(requests[0]?.init?.headers).not.toHaveProperty("chatgpt-account-id");
+    expect(requests[0]?.init?.headers).not.toHaveProperty("ChatGPT-Account-ID");
 
     const apiHeaders = requests[0]?.init?.headers as Record<string, string> | undefined;
     const boundary = apiHeaders?.["Content-Type"]?.split("boundary=")[1];
@@ -68,20 +68,50 @@ describe("GPT-Live call creation", () => {
     expect(apiBody).toContain(JSON.stringify(session));
   });
 
-  it("rejects GPT-Live OAuth before creating a cross-registry call", async () => {
-    const fetchImpl = vi.fn();
-    const promise = createOpenAIQuicksilverCall({
-      auth: { type: "oauth", token: "oauth-token", accountId: "acct-1" },
-      requestIds: createRequestIds("oauth"),
-      sdp: "v=oauth-offer\r\n",
-      session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-boulder-alpha" }),
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+  it("uses the Codex backend JSON call route for ChatGPT OAuth", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.7.2-test");
+    const session = buildOpenAIQuicksilverSession({
+      model: "gpt-live-1-boulder-alpha",
+      instructions: "Speak briefly.",
+      voice: "marin",
     });
+    const fetchImpl = vi.fn(async () => createCallResponse("v=oauth-answer\r\n", "rtc_oauth-call"));
 
-    await expect(promise).rejects.toThrow(
-      "GPT-Live ChatGPT OAuth is disabled until the upstream sideband join is proven",
+    await expect(
+      createOpenAIQuicksilverCall({
+        auth: { type: "oauth", token: "oauth-token", accountId: "acct-1" },
+        requestIds: createRequestIds("oauth"),
+        sdp: "v=oauth-offer\r\n",
+        session,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).resolves.toEqual({
+      kind: "gpt-live",
+      status: 201,
+      answerSdp: "v=oauth-answer\r\n",
+      callId: "rtc_oauth-call",
+      sidebandUrl: "wss://api.openai.com/v1/live/rtc_oauth-call",
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer oauth-token",
+          "ChatGPT-Account-ID": "acct-1",
+          "Content-Type": "application/json",
+          "OpenAI-Alpha": "quicksilver=v2",
+          "User-Agent": "openclaw/2026.7.2-test",
+          originator: "openclaw",
+          "session-id": "oauth-session",
+          "thread-id": "oauth-thread",
+          version: "2026.7.2-test",
+          "x-session-id": "oauth-realtime",
+        },
+        body: JSON.stringify({ sdp: "v=oauth-offer\r\n", session }),
+        signal: undefined,
+      },
     );
-    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it.each(["gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"])(
@@ -115,7 +145,7 @@ describe("GPT-Live call creation", () => {
           headers: {
             Authorization: "Bearer oauth-token",
             "User-Agent": "openclaw/2026.7.2-test",
-            "chatgpt-account-id": "acct-1",
+            "ChatGPT-Account-ID": "acct-1",
             originator: "openclaw",
             "session-id": "ga-oauth-session",
             "thread-id": "ga-oauth-thread",
@@ -232,18 +262,26 @@ describe("GPT-Live call creation", () => {
   });
 
   it.each([
-    { location: null, callId: "rtc_header_fallback" },
-    { location: null, callId: "019eb97d-8e9a-7ff3-94b0-ea019babd5d7" },
-    { location: "http://[invalid", callId: "rtc_malformed_location_fallback" },
-    { location: "/v1/live/not-a-call", callId: "rtc_invalid_path_fallback" },
-  ])("falls back to openai-session-id for Location $location", async ({ location, callId }) => {
+    {
+      location: undefined,
+      message: "GPT-Live call response missing Location",
+    },
+    {
+      location: "http://[invalid",
+      message: "GPT-Live call response returned an invalid Location",
+    },
+    {
+      location: "/v1/live/not-a-call",
+      message: "GPT-Live call response Location has no valid call id",
+    },
+  ])("requires a valid call id in Location: $location", async ({ location, message }) => {
     const fetchImpl = vi.fn(
       async () =>
         new Response("v=answer\r\n", {
           status: 201,
           headers: {
             ...(location ? { Location: location } : {}),
-            "openai-session-id": callId,
+            "openai-session-id": "rtc_header_fallback",
           },
         }),
     );
@@ -251,12 +289,12 @@ describe("GPT-Live call creation", () => {
     await expect(
       createOpenAIQuicksilverCall({
         auth: { type: "api-key", token: "platform-key" },
-        requestIds: createRequestIds("header-fallback"),
+        requestIds: createRequestIds("strict-location"),
         sdp: "v=offer\r\n",
         session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-boulder-alpha" }),
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
-    ).resolves.toMatchObject({ callId });
+    ).rejects.toThrow(message);
   });
 
   it("accepts a UUID call id from Location", async () => {

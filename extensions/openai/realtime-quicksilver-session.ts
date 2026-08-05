@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveProviderAuthProfileApiKey } from "openclaw/plugin-sdk/provider-auth";
+import { resolveProviderOAuthAccess } from "openclaw/plugin-sdk/provider-auth";
 import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
@@ -14,7 +14,6 @@ import {
   resolveAcceptedBrowserOrigin,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import WebSocket, { type RawData } from "ws";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import {
   releaseOpenAIQuicksilverSession,
@@ -133,21 +132,19 @@ export async function resolveOpenAIChatGptSubscriptionAuth(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): Promise<Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined> {
-  const token = await resolveProviderAuthProfileApiKey({
+  const access = await resolveProviderOAuthAccess({
     provider: "openai",
     cfg: params.cfg,
     agentDir: params.agentDir,
-    profileTypes: ["oauth"],
     includeExternalCliAuth: false,
   });
-  if (!token) {
+  if (!access) {
     return undefined;
   }
-  const accountId = resolveCodexAuthIdentity({ accessToken: token }).accountId;
-  if (!accountId) {
+  if (!access.accountId) {
     throw new Error("The selected ChatGPT OAuth profile is missing its account id");
   }
-  return { type: "oauth", token, accountId };
+  return { type: "oauth", token: access.accessToken, accountId: access.accountId };
 }
 
 export function createOpenAIQuicksilverBrowserSessionBroker(params: {

@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
+import { OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
 import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 
 const OPENAI_QUICKSILVER_APPEND_MAX_BYTES = 500;
@@ -15,6 +16,12 @@ const OPENAI_QUICKSILVER_CONTEXT_MAX_ENTRIES = 16;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_ITEM_CHARS = 800;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES = 8_000;
 const OPENAI_QUICKSILVER_CALL_URL = "https://api.openai.com/v1/live";
+const OPENAI_QUICKSILVER_OAUTH_CALL_URL = (() => {
+  const url = new URL("realtime/calls", `${OPENAI_CODEX_RESPONSES_BASE_URL}/`);
+  url.searchParams.set("intent", "quicksilver");
+  url.searchParams.set("architecture", "avas");
+  return url.toString();
+})();
 const OPENAI_REALTIME_CALL_URL = "https://api.openai.com/v1/realtime/calls";
 const OPENAI_REALTIME_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS = 500;
@@ -275,7 +282,7 @@ function openAIRealtimeAuthHeaders(params: {
     "x-session-id": params.requestIds.realtimeSessionId,
     ...(params.auth.type === "oauth"
       ? {
-          "chatgpt-account-id": params.auth.accountId,
+          "ChatGPT-Account-ID": params.auth.accountId,
         }
       : {}),
   };
@@ -317,34 +324,19 @@ function isOpenAIQuicksilverCallId(value: string): boolean {
 
 function decodeOpenAIQuicksilverCallId(params: {
   location: string | null;
-  openAiSessionId: string | null;
   callUrl: string;
 }): string {
-  const sessionId = params.openAiSessionId?.trim() ?? "";
   if (!params.location) {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
-    }
-    throw new OpenAIQuicksilverCallError(
-      sessionId
-        ? "GPT-Live call response returned an invalid openai-session-id"
-        : "GPT-Live call response missing Location and openai-session-id headers",
-    );
+    throw new OpenAIQuicksilverCallError("GPT-Live call response missing Location");
   }
   let pathname: string;
   try {
     pathname = new URL(params.location, params.callUrl).pathname;
   } catch {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
-    }
     throw new OpenAIQuicksilverCallError("GPT-Live call response returned an invalid Location");
   }
   const callId = pathname.split("/").filter(Boolean).find(isOpenAIQuicksilverCallId);
   if (!callId) {
-    if (isOpenAIQuicksilverCallId(sessionId)) {
-      return sessionId;
-    }
     throw new OpenAIQuicksilverCallError("GPT-Live call response Location has no valid call id");
   }
   return callId;
@@ -390,16 +382,18 @@ export async function createOpenAIQuicksilverCall(params: {
   | { kind: "ga-realtime"; status: number; answerSdp: string }
 > {
   const isGptLive = isOpenAIGptLiveModel(params.session.model);
-  if (isGptLive && params.auth.type === "oauth") {
-    throw new OpenAIQuicksilverCallError(
-      "GPT-Live ChatGPT OAuth is disabled until the upstream sideband join is proven; configure an OpenAI Platform API key with /v1/live access",
-    );
-  }
   const callUrl = isGptLive
-    ? OPENAI_QUICKSILVER_CALL_URL
+    ? params.auth.type === "oauth"
+      ? OPENAI_QUICKSILVER_OAUTH_CALL_URL
+      : OPENAI_QUICKSILVER_CALL_URL
     : `${OPENAI_REALTIME_CALL_URL}?model=${encodeURIComponent(params.session.model)}`;
   const authHeaders = isGptLive
-    ? openAIQuicksilverAuthHeaders(params.auth, params.requestIds)
+    ? openAIRealtimeAuthHeaders({
+        auth: params.auth,
+        requestIds: params.requestIds,
+        baseUrl: callUrl,
+        includeQuicksilverAlpha: true,
+      })
     : openAIRealtimeAuthHeaders({
         auth: params.auth,
         requestIds: params.requestIds,
@@ -407,19 +401,31 @@ export async function createOpenAIQuicksilverCall(params: {
         includeQuicksilverAlpha: false,
       });
   const multipart = isGptLive
-    ? buildOpenAIQuicksilverMultipartBody({
-        sdp: params.sdp,
-        session: params.session,
-      })
+    ? params.auth.type === "api-key"
+      ? buildOpenAIQuicksilverMultipartBody({
+          sdp: params.sdp,
+          session: params.session,
+        })
+      : undefined
     : undefined;
+  const body =
+    isGptLive && params.auth.type === "oauth"
+      ? JSON.stringify({
+          sdp: params.sdp,
+          session: params.session,
+        })
+      : (multipart?.body ?? params.sdp);
 
   const response = await (params.fetchImpl ?? fetch)(callUrl, {
     method: "POST",
     headers: {
       ...authHeaders,
-      "Content-Type": multipart?.contentType ?? "application/sdp",
+      "Content-Type":
+        isGptLive && params.auth.type === "oauth"
+          ? "application/json"
+          : (multipart?.contentType ?? "application/sdp"),
     },
-    body: multipart?.body ?? params.sdp,
+    body,
     signal: params.signal,
   });
   if (!response.ok) {
@@ -453,11 +459,8 @@ export async function createOpenAIQuicksilverCall(params: {
   }
   const callId = decodeOpenAIQuicksilverCallId({
     location: response.headers.get("Location"),
-    openAiSessionId: response.headers.get("openai-session-id"),
     callUrl,
   });
-  // Call creation and sideband must share the direct Realtime registry. A
-  // ChatGPT-origin call id cannot currently be joined on this endpoint.
   return {
     kind: "gpt-live",
     status: response.status,

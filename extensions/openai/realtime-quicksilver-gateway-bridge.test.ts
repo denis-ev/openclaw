@@ -552,6 +552,70 @@ describe("GPT-Live gateway relay bridge", () => {
     };
   }
 
+  it("uses ChatGPT OAuth for the backend call and direct authenticated sideband", async () => {
+    const peer = {
+      createOffer: vi.fn(async () => "v=oauth-offer\r\n"),
+      applyAnswer: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+    } satisfies OpenAIQuicksilverAudioPeerContract;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response("v=oauth-answer\r\n", {
+          status: 201,
+          headers: { Location: "/backend-api/codex/realtime/calls/rtc_gateway-oauth" },
+        }),
+    );
+    let sidebandUrl: string | undefined;
+    let sidebandHeaders: Record<string, string> | undefined;
+    const bridge = new OpenAIQuicksilverGatewayBridge({
+      providerConfig: {},
+      model: "gpt-live-1-boulder-alpha",
+      voice: "marin",
+      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      runAgentConsult: vi.fn(async () => ({ text: "done" })),
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      resolveAuth: vi.fn(async () => ({
+        type: "oauth" as const,
+        token: "oauth-token",
+        accountId: "account-123",
+      })),
+      createPeer: vi.fn(async () => peer),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      webSocketFactory: (url, options) => {
+        sidebandUrl = url;
+        sidebandHeaders = options.headers;
+        return new FakeSocket();
+      },
+    });
+
+    try {
+      await bridge.connect();
+      expect(fetchImpl).toHaveBeenCalledWith(
+        "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            Authorization: "Bearer oauth-token",
+            "ChatGPT-Account-ID": "account-123",
+            "Content-Type": "application/json",
+          }),
+        }),
+      );
+      expect(peer.applyAnswer).toHaveBeenCalledWith("v=oauth-answer\r\n");
+      expect(sidebandUrl).toBe("wss://api.openai.com/v1/live/rtc_gateway-oauth");
+      expect(sidebandHeaders).toMatchObject({
+        Authorization: "Bearer oauth-token",
+        "ChatGPT-Account-ID": "account-123",
+        "OpenAI-Alpha": "quicksilver=v2",
+      });
+    } finally {
+      bridge.close();
+    }
+  });
+
   it("preserves caller-owned microphone frames while the media peer is starting", async () => {
     const { bridge, connection, peer, resolvePeer } = createPendingPeerBridge();
     try {

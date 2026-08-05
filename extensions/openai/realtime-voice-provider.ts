@@ -56,6 +56,7 @@ import {
   OPENAI_QUICKSILVER_CAPABILITIES,
   resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
+import type { OpenAIQuicksilverAuth } from "./realtime-quicksilver-wire.js";
 import {
   assertSupportedOpenAIGptLiveModel,
   getUnsupportedOpenAIGptLiveModelMessage,
@@ -298,7 +299,7 @@ type OpenAIRealtimeApiKeyResolution =
 const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =
   "OpenAI Realtime voice requires an OpenAI Platform API key";
 const OPENAI_GPT_LIVE_AUTH_REQUIRED =
-  "GPT-Live Talk requires an OpenAI Platform API key with /v1/live access";
+  "GPT-Live browser and Gateway relay require an OpenAI Platform API key or ChatGPT OAuth profile with GPT-Live access";
 const OPENAI_REALTIME_API_KEY_REQUIRED = "OpenAI Realtime voice requires an API key";
 const OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED =
   "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source";
@@ -510,14 +511,26 @@ async function requireOpenAIRealtimePlatformAuth(params: {
   throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
 }
 
-async function requireOpenAIQuicksilverPlatformAuth(params: {
+async function requireOpenAIQuicksilverBrokerAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
   agentId?: string;
-}) {
+}): Promise<OpenAIQuicksilverAuth> {
   const platformAuth = await resolveOpenAIRealtimePlatformAuth(params);
   if (platformAuth.status === "available") {
-    return { type: "api-key" as const, token: platformAuth.value };
+    return { type: "api-key", token: platformAuth.value };
+  }
+  if (hasOpenAIRealtimePlatformAuthInput(params)) {
+    throw new Error(OPENAI_GPT_LIVE_AUTH_REQUIRED);
+  }
+  const agentDir =
+    params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined;
+  const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
+    cfg: params.cfg,
+    ...(agentDir ? { agentDir } : {}),
+  });
+  if (subscriptionAuth) {
+    return subscriptionAuth;
   }
   throw new Error(OPENAI_GPT_LIVE_AUTH_REQUIRED);
 }
@@ -1900,7 +1913,7 @@ async function createOpenAIRealtimeBrowserSession(
       instructions: buildOpenAIQuicksilverInstructions(req.instructions),
       ...(req.voice ? {} : configuredVoice ? { voice: configuredVoice } : {}),
     };
-    const auth = await requireOpenAIQuicksilverPlatformAuth({
+    const auth = await requireOpenAIQuicksilverBrokerAuth({
       configuredApiKey: config.apiKey,
       cfg: req.cfg,
       agentId: req.agentId,
@@ -2063,7 +2076,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
             instructions: buildOpenAIQuicksilverInstructions(req.instructions),
             logger: options?.logger ?? { debug: () => undefined, warn: () => undefined },
             resolveAuth: () =>
-              requireOpenAIQuicksilverPlatformAuth({
+              requireOpenAIQuicksilverBrokerAuth({
                 configuredApiKey: config.apiKey,
                 cfg: req.cfg,
                 agentId: req.agentId,
@@ -2124,11 +2137,12 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
         }
         return (
           options?.quicksilverBrowserSessionBroker !== undefined &&
-          hasOpenAIRealtimePlatformAuthInput({
+          (hasOpenAIRealtimePlatformAuthInput({
             configuredApiKey: config.apiKey,
             cfg,
             agentId,
-          })
+          }) ||
+            hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }))
         );
       }
       return (
@@ -2161,11 +2175,12 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
       }
       return (
         isSupportedOpenAIGptLiveModel(config.model) &&
-        hasOpenAIRealtimePlatformAuthInput({
+        (hasOpenAIRealtimePlatformAuthInput({
           configuredApiKey: config.apiKey,
           cfg,
           agentId,
-        })
+        }) ||
+          hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }))
       );
     },
     resolveGatewayRelayCapabilities: ({ providerConfig, model }) => {

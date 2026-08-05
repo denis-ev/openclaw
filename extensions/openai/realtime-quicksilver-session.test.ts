@@ -147,7 +147,7 @@ describe("GPT-Live offer broker", () => {
           body: "v=ga-offer\r\n",
           headers: expect.objectContaining({
             Authorization: "Bearer oauth-token",
-            "chatgpt-account-id": "account-123",
+            "ChatGPT-Account-ID": "account-123",
             "Content-Type": "application/sdp",
           }),
         },
@@ -157,6 +157,64 @@ describe("GPT-Live offer broker", () => {
       const replay = createResponseHarness();
       await realtime.handler(createRequest({ token: reservation.clientSecret }), replay.res);
       expect(replay.res.statusCode).toBe(401);
+    } finally {
+      await realtime.cleanup();
+    }
+  });
+
+  it("brokers GPT-Live OAuth through the Codex call route and direct sideband", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.7.2-test");
+    let signalingUrl: string | undefined;
+    let signalingInit: RequestInit | undefined;
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      signalingUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      signalingInit = init;
+      return createCallResponse("v=oauth-answer\r\n", "rtc_browser-oauth");
+    }) as unknown as typeof fetch;
+    const { realtime, socketRequests } = createBroker({ fetchImpl });
+    try {
+      const reservation = await realtime.broker.createBrowserSession(
+        {
+          providerConfig: {},
+          model: "gpt-live-1-boulder-alpha",
+          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+        },
+        { type: "oauth", token: "oauth-token", accountId: "account-123" },
+      );
+      if (reservation.transport !== "webrtc") {
+        throw new Error("Expected WebRTC reservation");
+      }
+      const response = createResponseHarness();
+      await realtime.handler(
+        createRequest({ token: reservation.clientSecret, body: "v=oauth-offer\r\n" }),
+        response.res,
+      );
+
+      expect(response.res.statusCode).toBe(200);
+      expect(response.readBody()).toBe("v=oauth-answer\r\n");
+      expect(signalingUrl).toBe(
+        "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+      );
+      expect(signalingInit).toMatchObject({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer oauth-token",
+          "ChatGPT-Account-ID": "account-123",
+          "Content-Type": "application/json",
+        }),
+      });
+      expect(JSON.parse(String(signalingInit?.body))).toMatchObject({
+        sdp: "v=oauth-offer\r\n",
+        session: { model: "gpt-live-1-boulder-alpha" },
+      });
+      expect(socketRequests[0]).toMatchObject({
+        url: "wss://api.openai.com/v1/live/rtc_browser-oauth",
+        headers: expect.objectContaining({
+          Authorization: "Bearer oauth-token",
+          "ChatGPT-Account-ID": "account-123",
+          "OpenAI-Alpha": "quicksilver=v2",
+        }),
+      });
     } finally {
       await realtime.cleanup();
     }
@@ -216,8 +274,8 @@ describe("GPT-Live offer broker", () => {
       expect(signalingHeaders?.["session-id"]).not.toBe(signalingHeaders?.["x-session-id"]);
       expect(signalingHeaders?.["thread-id"]).not.toBe(signalingHeaders?.["x-session-id"]);
       expect(signalingHeaders?.["thread-id"]).not.toBe(signalingHeaders?.["session-id"]);
-      expect(signalingHeaders).not.toHaveProperty("chatgpt-account-id");
-      expect(sideband?.headers).not.toHaveProperty("chatgpt-account-id");
+      expect(signalingHeaders).not.toHaveProperty("ChatGPT-Account-ID");
+      expect(sideband?.headers).not.toHaveProperty("ChatGPT-Account-ID");
     } finally {
       await realtime.cleanup();
     }

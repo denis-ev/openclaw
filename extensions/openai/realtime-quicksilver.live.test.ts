@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import {
   readCodexCliCredentialsCached,
-  resolveProviderAuthProfileApiKey,
+  resolveProviderOAuthAccess,
 } from "openclaw/plugin-sdk/provider-auth";
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
@@ -61,17 +61,15 @@ async function resolveLiveOAuthProfile(): Promise<
   Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined
 > {
   try {
-    const token = await resolveProviderAuthProfileApiKey({
+    const access = await resolveProviderOAuthAccess({
       provider: "openai",
-      profileTypes: ["oauth"],
       includeExternalCliAuth: false,
     });
-    if (token) {
-      const accountId = resolveCodexAuthIdentity({ accessToken: token }).accountId;
-      if (!accountId) {
+    if (access) {
+      if (!access.accountId) {
         throw new Error("The selected ChatGPT OAuth profile is missing its account id");
       }
-      return { type: "oauth", token, accountId };
+      return { type: "oauth", token: access.accessToken, accountId: access.accountId };
     }
   } catch (error) {
     if (!(error instanceof Error) || error.name !== "AuthProfileMigrationRequiredError") {

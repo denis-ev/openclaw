@@ -60,6 +60,7 @@ const {
   fetchWithSsrFGuardMock,
   isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKeyMock,
+  resolveProviderOAuthAccessMock,
 } = vi.hoisted(() => {
   type Listener = (...args: unknown[]) => void;
 
@@ -128,6 +129,7 @@ const {
     fetchWithSsrFGuardMock: vi.fn(),
     isProviderAuthProfileConfiguredMock: vi.fn(),
     resolveProviderAuthProfileApiKeyMock: vi.fn(),
+    resolveProviderOAuthAccessMock: vi.fn(),
   };
 });
 
@@ -150,6 +152,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKey: resolveProviderAuthProfileApiKeyMock,
+  resolveProviderOAuthAccess: resolveProviderOAuthAccessMock,
 }));
 
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
@@ -391,14 +394,6 @@ function createMalformedToolName(name: unknown): RealtimeVoiceTool {
   } as unknown as RealtimeVoiceTool;
 }
 
-function createTestJwt(payload: Record<string, unknown>): string {
-  return [
-    Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url"),
-    Buffer.from(JSON.stringify(payload)).toString("base64url"),
-    "test-signature",
-  ].join(".");
-}
-
 describe("buildOpenAIRealtimeVoiceProvider", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
@@ -409,6 +404,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     isProviderAuthProfileConfiguredMock.mockReturnValue(false);
     resolveProviderAuthProfileApiKeyMock.mockReset();
     resolveProviderAuthProfileApiKeyMock.mockResolvedValue(undefined);
+    resolveProviderOAuthAccessMock.mockReset();
+    resolveProviderOAuthAccessMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -978,6 +975,91 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
+  it("falls back to agent-scoped ChatGPT OAuth for gpt-live broker sessions", async () => {
+    resolveProviderOAuthAccessMock.mockResolvedValue({
+      accessToken: "oauth-token",
+      accountId: "account-123",
+    });
+    const createBrowserSession = vi.fn(async () => ({
+      provider: "openai",
+      transport: "webrtc" as const,
+      clientSecret: "quicksilver-token",
+      offerUrl: "/plugins/openai/realtime/calls",
+    }));
+    const provider = buildOpenAIRealtimeVoiceProvider({
+      quicksilverBrowserSessionBroker: {
+        capabilities: { handlesAgentConsult: true as const },
+        createBrowserSession,
+        cancelBrowserSession: vi.fn(),
+      },
+    });
+    const cfg = {
+      agents: {
+        list: [{ id: "voice", agentDir: "/tmp/openclaw-agent-voice" }],
+      },
+    } as never;
+
+    await expect(
+      provider.createBrowserSession?.({
+        cfg,
+        providerConfig: {},
+        model: "gpt-live-1-boulder-alpha",
+        agentId: "voice",
+        workspaceDir: "/tmp/openclaw-agent-workspace",
+        initialItems: [],
+        runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+      } as never),
+    ).resolves.toMatchObject({
+      offerUrl: "/plugins/openai/realtime/calls",
+    });
+    expect(resolveProviderOAuthAccessMock).toHaveBeenCalledWith({
+      provider: "openai",
+      cfg,
+      agentDir: "/tmp/openclaw-agent-voice",
+      includeExternalCliAuth: false,
+    });
+    expect(createBrowserSession).toHaveBeenCalledWith(expect.any(Object), {
+      type: "oauth",
+      token: "oauth-token",
+      accountId: "account-123",
+    });
+  });
+
+  it("fails closed when gpt-live Platform auth is authored but unresolved", async () => {
+    resolveProviderOAuthAccessMock.mockResolvedValue({
+      accessToken: "oauth-token",
+      accountId: "account-123",
+    });
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ profileTypes }: { profileTypes?: readonly string[] }) =>
+        profileTypes?.includes("api_key") === true,
+    );
+    const createBrowserSession = vi.fn();
+    const provider = buildOpenAIRealtimeVoiceProvider({
+      quicksilverBrowserSessionBroker: {
+        capabilities: { handlesAgentConsult: true as const },
+        createBrowserSession,
+        cancelBrowserSession: vi.fn(),
+      },
+    });
+
+    await expect(
+      provider.createBrowserSession?.({
+        cfg: {} as never,
+        providerConfig: {},
+        model: "gpt-live-1-boulder-alpha",
+        agentId: "main",
+        workspaceDir: "/tmp/openclaw-agent-workspace",
+        initialItems: [],
+        runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+      } as never),
+    ).rejects.toThrow(
+      "GPT-Live browser and Gateway relay require an OpenAI Platform API key or ChatGPT OAuth profile with GPT-Live access",
+    );
+    expect(resolveProviderOAuthAccessMock).not.toHaveBeenCalled();
+    expect(createBrowserSession).not.toHaveBeenCalled();
+  });
+
   it("scopes GPT-Live availability and browser auth to the selected agent", async () => {
     isProviderAuthProfileConfiguredMock.mockReturnValue(true);
     resolveProviderAuthProfileApiKeyMock.mockResolvedValue("sk-profile"); // pragma: allowlist secret
@@ -1046,7 +1128,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
   });
 
-  it("does not advertise unsupported aliases or OAuth-only GPT-Live", async () => {
+  it("keeps standalone GPT-Live Platform-only while enabling OAuth broker routes", async () => {
     isProviderAuthProfileConfiguredMock.mockImplementation(
       ({ profileTypes }: { profileTypes?: readonly string[] }) =>
         profileTypes?.includes("oauth") === true,
@@ -1119,12 +1201,19 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         providerConfig: { model: "gpt-live-1-boulder-alpha" },
         agentId: "main",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       readInternalRealtimeVoiceProviderApi(provider).isBrowserSessionConfigured({
         cfg,
         providerConfig: { model: "gpt-live-1-boulder-alpha" },
         agentId: "main",
+      }),
+    ).toBe(true);
+    expect(
+      provider.isConfigured({
+        cfg,
+        agentId: "main",
+        providerConfig: { model: "gpt-live-1-boulder-alpha" },
       }),
     ).toBe(false);
     expect(
@@ -1146,9 +1235,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       } as never),
     ).rejects.toThrow('Unsupported GPT-Live model "gpt-live-1-mini"');
     expect(createBrowserSession).not.toHaveBeenCalled();
-    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ profileTypes: ["oauth"] }),
-    );
+    expect(resolveProviderOAuthAccessMock).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported models before validating consult routing", () => {
@@ -1170,13 +1257,10 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   });
 
   it("uses Platform auth without consulting ChatGPT OAuth for gpt-live", async () => {
-    const oauthToken = createTestJwt({
-      "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
+    resolveProviderOAuthAccessMock.mockResolvedValue({
+      accessToken: "oauth-token",
+      accountId: "account-123",
     });
-    resolveProviderAuthProfileApiKeyMock.mockImplementation(
-      async ({ profileTypes }: { profileTypes?: readonly string[] }) =>
-        profileTypes?.includes("oauth") ? oauthToken : undefined,
-    );
     const createBrowserSession = vi.fn(async () => ({
       provider: "openai",
       transport: "webrtc" as const,
@@ -1204,19 +1288,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       type: "api-key",
       token: "sk-platform", // pragma: allowlist secret
     });
-    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ profileTypes: ["oauth"] }),
-    );
+    expect(resolveProviderOAuthAccessMock).not.toHaveBeenCalled();
   });
 
   it("keeps Platform precedence for GA realtime when OAuth is also available", async () => {
-    const oauthToken = createTestJwt({
-      "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
+    resolveProviderOAuthAccessMock.mockResolvedValue({
+      accessToken: "oauth-token",
+      accountId: "account-123",
     });
-    resolveProviderAuthProfileApiKeyMock.mockImplementation(
-      async ({ profileTypes }: { profileTypes?: readonly string[] }) =>
-        profileTypes?.includes("oauth") ? oauthToken : undefined,
-    );
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: createJsonResponse({ client_secret: { value: "client-secret-123" } }),
       release: vi.fn(async () => undefined),
@@ -1228,22 +1307,17 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       model: "gpt-realtime-2.1",
     });
 
-    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ profileTypes: ["oauth"] }),
-    );
+    expect(resolveProviderOAuthAccessMock).not.toHaveBeenCalled();
     expectRecordFields(requireFetchHeaders(), "fetch headers", {
       Authorization: "Bearer sk-platform", // pragma: allowlist secret
     });
   });
 
   it("uses ChatGPT OAuth as the browser-only fallback for GA realtime", async () => {
-    const oauthToken = createTestJwt({
-      "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
+    resolveProviderOAuthAccessMock.mockResolvedValue({
+      accessToken: "oauth-token",
+      accountId: "account-123",
     });
-    resolveProviderAuthProfileApiKeyMock.mockImplementation(
-      async ({ profileTypes }: { profileTypes?: readonly string[] }) =>
-        profileTypes?.includes("oauth") ? oauthToken : undefined,
-    );
     isProviderAuthProfileConfiguredMock.mockImplementation(
       ({ profileTypes }: { profileTypes?: readonly string[] }) =>
         profileTypes?.includes("oauth") === true,
@@ -1286,19 +1360,22 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
     expect(createBrowserSession).toHaveBeenCalledWith(
       expect.objectContaining({ model: "gpt-realtime-2.1", voice: "cedar" }),
-      { type: "oauth", token: oauthToken, accountId: "account-123" },
+      { type: "oauth", token: "oauth-token", accountId: "account-123" },
     );
+    expect(resolveProviderOAuthAccessMock).toHaveBeenCalledWith({
+      provider: "openai",
+      cfg,
+      agentDir: expect.any(String),
+      includeExternalCliAuth: false,
+    });
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("does not use GA OAuth fallback when a Platform credential source is unresolved", async () => {
-    const oauthToken = createTestJwt({
-      "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
+    resolveProviderOAuthAccessMock.mockResolvedValue({
+      accessToken: "oauth-token",
+      accountId: "account-123",
     });
-    resolveProviderAuthProfileApiKeyMock.mockImplementation(
-      async ({ profileTypes }: { profileTypes?: readonly string[] }) =>
-        profileTypes?.includes("oauth") ? oauthToken : undefined,
-    );
     isProviderAuthProfileConfiguredMock.mockImplementation(
       ({ profileTypes }: { profileTypes?: readonly string[] }) =>
         profileTypes?.includes("api_key") === true,
@@ -1323,9 +1400,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       } as never),
     ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
     expect(createBrowserSession).not.toHaveBeenCalled();
-    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ profileTypes: ["oauth"] }),
-    );
+    expect(resolveProviderOAuthAccessMock).not.toHaveBeenCalled();
   });
 
   it("passes configured gpt-live model and voice to the native broker", async () => {
@@ -1399,7 +1474,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         providerConfig: {},
         model: "gpt-live-1-boulder-alpha",
       }),
-    ).rejects.toThrow("GPT-Live Talk requires an OpenAI Platform API key with /v1/live access");
+    ).rejects.toThrow(
+      "GPT-Live browser and Gateway relay require an OpenAI Platform API key or ChatGPT OAuth profile with GPT-Live access",
+    );
     expect(createBrowserSession).not.toHaveBeenCalled();
   });
 
