@@ -24,6 +24,7 @@ import {
   runEmbeddedAgentEntry,
   type EmbeddedAgentRunEntryTerminal,
 } from "../embedded-agent-runner/run-entry.js";
+import { copyEmbeddedRunAccountingObservers } from "../embedded-agent-runner/run/accounting-observers.js";
 import { resolveFastModeState } from "../fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
@@ -528,7 +529,7 @@ export async function runEmbeddedAgentAttempt(params: {
       fallbackExhausted = fallbackResult.outcome === "exhausted";
       await fallbackResult.settleSessionOverride();
       if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
-        result = {
+        result = copyEmbeddedRunAccountingObservers(result, {
           ...result,
           meta: {
             ...result.meta,
@@ -537,7 +538,7 @@ export async function runEmbeddedAgentAttempt(params: {
               fallbackAttempts: fallbackResult.attempts,
             },
           },
-        };
+        });
       }
       if (!fallbackExhausted) {
         lifecycle.emitFinishing(terminal);

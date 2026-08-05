@@ -14,6 +14,7 @@ import {
   shouldPersistCurrentRunSessionCleanup,
 } from "../agent-command-restart-recovery.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
+import { observeEmbeddedRunFinalQuiescence } from "../embedded-agent-runner/run/accounting-observers.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
@@ -34,7 +35,7 @@ type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;
 
 const log = createSubsystemLogger("agents/agent-command");
 
-export async function finalizeEmbeddedAgentCommand(params: {
+type FinalizeEmbeddedAgentCommandParams = {
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
   deps: CliDeps;
@@ -58,7 +59,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
     evidence: RestartRecoveryTerminalDeliveryEvidenceResult,
   ) => void;
   commandRunAccounting?: RunAccountingAccumulator;
-}) {
+};
+
+async function finalizeEmbeddedAgentCommandInternal(params: FinalizeEmbeddedAgentCommandParams) {
   const {
     cfg,
     body,
@@ -404,5 +407,13 @@ export async function finalizeEmbeddedAgentCommand(params: {
   } catch (error) {
     lifecycle.emitPostTurnError(error);
     throw error;
+  }
+}
+
+export async function finalizeEmbeddedAgentCommand(params: FinalizeEmbeddedAgentCommandParams) {
+  try {
+    return await finalizeEmbeddedAgentCommandInternal(params);
+  } finally {
+    observeEmbeddedRunFinalQuiescence(params.attempt.result);
   }
 }

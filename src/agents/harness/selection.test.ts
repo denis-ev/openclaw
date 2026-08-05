@@ -431,6 +431,7 @@ describe("runAgentHarnessAttempt", () => {
     bindEmbeddedRunAccountingObservers(params, {
       onAgentSubmission: vi.fn(),
       onAttemptObserved: vi.fn(),
+      onCodeModeFinalQuiescence: vi.fn(),
     });
     const settledAttempt = createAttemptResult("settled");
 

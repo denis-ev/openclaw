@@ -30,6 +30,7 @@ import {
   shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
+import { discardCodeModeRunActivity } from "./code-mode-activity.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import {
@@ -540,6 +541,7 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
+    discardCodeModeRunActivity(commandRunAccounting?.codeModeActivityOwner);
     sessionWorkAdmission?.release();
     if (internalModelRunTargets) {
       // Compaction may rotate a private session identity. Remove every owned

@@ -73,7 +73,10 @@ import {
 } from "../cli-session.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
-import { bindEmbeddedRunAccountingObservers } from "../embedded-agent-runner/run/accounting-observers.js";
+import {
+  bindEmbeddedRunAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+} from "../embedded-agent-runner/run/accounting-observers.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
@@ -1246,17 +1249,24 @@ export function runAgentAttempt(params: {
     bootstrapPromptWarningSignature,
   };
   bindEmbeddedRunAccountingObservers(embeddedRunParams, {
+    codeModeActivityOwner: params.commandRunAccounting?.codeModeActivityOwner,
     onAgentSubmission: params.commandRunAccounting?.beginAgentSubmission,
     onAttemptObserved: params.commandRunAccounting?.observeEmbeddedAttempt,
     onRuntimeSelected: params.commandRunAccounting?.selectRuntime,
     onOpaqueWork: params.commandRunAccounting?.markOpaqueWork,
+    onCodeModeFinalQuiescence: params.commandRunAccounting?.observeCodeModeFinalQuiescence,
   });
   setChannelSourceTurnId(embeddedRunParams, readChannelSourceTurnId(params.runContext));
   setChannelSourceTurnSameThreadRequired(
     embeddedRunParams,
     readChannelSourceTurnSameThreadRequired(params.runContext),
   );
-  return runEmbeddedAgent(embeddedRunParams);
+  return runEmbeddedAgent(embeddedRunParams).then((result) =>
+    bindEmbeddedRunAccountingObservers(
+      result,
+      resolveEmbeddedRunAccountingObservers(embeddedRunParams),
+    ),
+  );
 }
 
 export function buildAcpResult(params: {

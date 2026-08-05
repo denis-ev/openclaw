@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import {
+  createCodeModeActivityOwner,
+  type CodeModeRunFinalQuiescence,
+} from "../code-mode-activity.js";
 import { cloneCodeModeStats, createCodeModeStats, mergeCodeModeStats } from "../code-mode-stats.js";
 import type {
   EmbeddedRunAccountingObservation,
@@ -167,6 +171,7 @@ type MutableRunAccounting = {
   codeModeLifecycleMissing: number;
   maxUnresolvedAtExtraction: number;
   attemptsWithUnresolved: number;
+  codeModeFinalQuiescence?: CodeModeRunFinalQuiescence;
 };
 
 function boundAccountingIdentity(value: string): { value: string; truncated: boolean } {
@@ -385,6 +390,7 @@ function observeEmbeddedAttempt(
 }
 
 export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAccountingAccumulator {
+  const codeModeActivityOwner = createCodeModeActivityOwner();
   const state: MutableRunAccounting = {
     startedAtMs,
     candidates: {
@@ -435,6 +441,7 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
   };
 
   return {
+    codeModeActivityOwner,
     beginCandidate(identity): AgentCommandRunCandidateAccounting {
       state.candidates.total += 1;
       let runtime: AgentCommandCandidateRuntime = "unknown";
@@ -457,6 +464,7 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
         state.candidates.truncated += 1;
       }
       return {
+        codeModeActivityOwner,
         selectRuntime(nextRuntime) {
           if (runtime === nextRuntime) {
             return;
@@ -489,6 +497,9 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
         },
         markOpaqueWork(reason) {
           state.opaqueWorkReasons.add(reason);
+        },
+        observeCodeModeFinalQuiescence(finalQuiescence) {
+          state.codeModeFinalQuiescence = finalQuiescence;
         },
         settle(outcome) {
           if (settled) {
@@ -586,6 +597,8 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
           state.usage[bucket].observed > 0 ? [[bucket, state.usage[bucket].value]] : [],
         ),
       ) as NonNullable<AgentCommandRunAccountingSnapshot["usage"]>;
+      const codeModeFinalQuiescenceReasons: AgentCommandRunAccountingCoverageReason[] =
+        runtimeReasons.length > 0 ? runtimeReasons : ["not_observed"];
       const codeMode =
         state.codeModeEngaged || state.codeModeStats
           ? {
@@ -600,11 +613,13 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
                     }
                   : {}),
                 finalQuiescence:
-                  state.codeModeLifecycleObserved === 0
-                    ? createCoverage("unavailable", ["not_observed"])
-                    : state.codeModeLifecycleMissing > 0
-                      ? createCoverage("partial", ["attempt_extraction_only", "not_observed"])
-                      : createCoverage("partial", ["attempt_extraction_only"]),
+                  state.codeModeFinalQuiescence === "quiescent" ||
+                  state.codeModeFinalQuiescence === "non_quiescent"
+                    ? { state: state.codeModeFinalQuiescence }
+                    : {
+                        state: "unavailable" as const,
+                        reasons: codeModeFinalQuiescenceReasons,
+                      },
               },
             }
           : undefined;
