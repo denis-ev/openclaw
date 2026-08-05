@@ -16,10 +16,6 @@ import {
   type OAuthProviderId,
 } from "../../llm/oauth.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import {
-  formatProviderAuthProfileApiKeyWithPlugin,
-  resolveProviderOAuthCredentialWithPlugin,
-} from "../../plugins/provider-runtime.runtime.js";
 import { secretRefKey } from "../../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
 import {
@@ -33,7 +29,6 @@ import {
   evaluateStoredCredentialEligibility,
   resolveTokenExpiryState,
 } from "./credential-state.js";
-import { formatAuthDoctorHint } from "./doctor.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
@@ -110,11 +105,23 @@ function isProfileConfigCompatible(params: {
   return true;
 }
 
+type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.runtime.js");
+
+let providerRuntimeModulePromise: Promise<ProviderRuntimeModule> | undefined;
+
+function loadProviderRuntimeModule(): Promise<ProviderRuntimeModule> {
+  // Provider runtime metadata is process-stable. Sharing one lazy import keeps
+  // raw OAuth access cold while avoiding duplicate import work under bursts.
+  providerRuntimeModulePromise ??= import("../../plugins/provider-runtime.runtime.js");
+  return providerRuntimeModulePromise;
+}
+
 async function buildOAuthApiKey(
   provider: string,
   credentials: OAuthCredential,
   context: { cfg?: OpenClawConfig },
 ): Promise<string> {
+  const { formatProviderAuthProfileApiKeyWithPlugin } = await loadProviderRuntimeModule();
   const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
     provider,
     config: context.cfg,
@@ -191,6 +198,7 @@ async function refreshOAuthCredential(
   credential: OAuthCredential,
   context: { cfg?: OpenClawConfig } = {},
 ): Promise<OAuthCredentials | null> {
+  const { resolveProviderOAuthCredentialWithPlugin } = await loadProviderRuntimeModule();
   const pluginResult = await resolveProviderOAuthCredentialWithPlugin({
     provider: credential.provider,
     config: context.cfg,
@@ -236,7 +244,6 @@ export async function refreshOAuthCredentialForRuntime(params: {
 }
 
 const oauthManager = createOAuthManager({
-  buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
   readBootstrapCredential: ({ store, profileId, credential }) =>
     readExternalCliBootstrapCredential({
@@ -261,7 +268,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 
 async function tryResolveOAuthProfile(
   params: ResolveApiKeyForProfileParams,
-): Promise<ResolveApiKeyForProfileResult | null> {
+): Promise<ResolvedOAuthProfile | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
   if (!cred || cred.type !== "oauth") {
@@ -278,7 +285,7 @@ async function tryResolveOAuthProfile(
     return null;
   }
 
-  const resolved = await oauthManager.resolveOAuthAccess({
+  const resolved = await oauthManager.resolveOAuthCredential({
     store,
     profileId,
     credential: cred,
@@ -289,14 +296,146 @@ async function tryResolveOAuthProfile(
   if (!resolved) {
     return null;
   }
-  return buildApiKeyProfileResult({
-    apiKey: resolved.apiKey,
-    provider: resolved.credential.provider,
-    email: resolved.credential.email ?? cred.email,
+  return {
+    credential: resolved,
     profileId,
-    profileType: cred.type,
-    credential: resolved.credential,
+    email: resolved.email ?? cred.email,
+  };
+}
+
+type ResolvedOAuthProfile = {
+  credential: OAuthCredential;
+  profileId: string;
+  email?: string;
+};
+
+async function resolveOAuthProfile(
+  params: ResolveApiKeyForProfileParams,
+  cred: OAuthCredential,
+): Promise<ResolvedOAuthProfile | null> {
+  const { cfg, profileId } = params;
+  try {
+    const resolved = await oauthManager.resolveOAuthCredential({
+      store: params.store,
+      agentDir: params.agentDir,
+      profileId,
+      credential: cred,
+      cfg,
+      forceRefresh: params.forceRefresh,
+    });
+    return resolved
+      ? {
+          credential: resolved,
+          profileId,
+          email: resolved.email ?? cred.email,
+        }
+      : null;
+  } catch (error) {
+    let refreshedStore =
+      error instanceof OAuthManagerRefreshError
+        ? error.getRefreshedStore()
+        : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+    const surfacedCause =
+      error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
+    if (isRefreshTokenReusedError(surfacedCause)) {
+      const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+        agentDir: params.agentDir,
+        profileId,
+      });
+      await clearLastGoodProfileWithLock({
+        provider: cred.provider,
+        profileId,
+        agentDir: ownerAgentDir,
+      });
+      if (
+        params.agentDir !== ownerAgentDir &&
+        hasRuntimeAuthProfileStoreSnapshot(params.agentDir)
+      ) {
+        const snapshot = getRuntimeAuthProfileStoreSnapshot(params.agentDir);
+        const providerKey = resolveProviderIdForAuth(cred.provider);
+        if (snapshot?.lastGood?.[providerKey] === profileId) {
+          delete snapshot.lastGood[providerKey];
+          if (Object.keys(snapshot.lastGood).length === 0) {
+            snapshot.lastGood = undefined;
+          }
+          setRuntimeAuthProfileStoreSnapshot(snapshot, params.agentDir);
+        }
+      }
+      refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+    }
+    const fallbackProfileId =
+      params.allowProfileFallback === false
+        ? null
+        : suggestOAuthProfileIdForLegacyDefault({
+            cfg,
+            store: refreshedStore,
+            provider: cred.provider,
+            legacyProfileId: profileId,
+          });
+    if (fallbackProfileId && fallbackProfileId !== profileId) {
+      try {
+        const fallbackResolved = await tryResolveOAuthProfile({
+          cfg,
+          store: refreshedStore,
+          profileId: fallbackProfileId,
+          agentDir: params.agentDir,
+          forceRefresh: params.forceRefresh,
+        });
+        if (fallbackResolved) {
+          return fallbackResolved;
+        }
+      } catch {
+        // keep original error
+      }
+    }
+
+    const message = extractErrorMessage(surfacedCause);
+    const { formatAuthDoctorHint } = await import("./doctor.js");
+    const hint = await formatAuthDoctorHint({
+      cfg,
+      store: refreshedStore,
+      provider: cred.provider,
+      profileId,
+    });
+    throw new OAuthRefreshFailureError({
+      provider: cred.provider,
+      profileId,
+      message:
+        `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
+        "Please try again or re-authenticate." +
+        (hint ? `\n\n${hint}` : ""),
+      cause: error,
+    });
+  }
+}
+
+/** Resolve a selected OAuth profile to its authoritative refreshed credential. */
+export async function resolveOAuthCredentialForProfile(
+  params: ResolveApiKeyForProfileParams,
+): Promise<OAuthCredential | null> {
+  const cred = params.store.profiles[params.profileId];
+  if (!cred || cred.type !== "oauth") {
+    return null;
+  }
+  const configForRefResolution = params.cfg ?? getRuntimeConfig();
+  assertNoOAuthSecretRefPolicyViolations({
+    store: params.store,
+    cfg: configForRefResolution,
+    profileIds: [params.profileId],
+    context: `auth profile ${params.profileId}`,
   });
+  if (
+    !isProfileConfigCompatible({
+      cfg: params.cfg,
+      profileId: params.profileId,
+      provider: cred.provider,
+      mode: cred.type,
+    })
+  ) {
+    return null;
+  }
+  const resolved = await resolveOAuthProfile(params, cred);
+  return resolved?.credential ?? null;
 }
 
 function authProfileSecretRefKey(
@@ -480,100 +619,16 @@ export async function resolveApiKeyForProfile(
     });
   }
 
-  try {
-    const resolved = await oauthManager.resolveOAuthAccess({
-      store,
-      agentDir: params.agentDir,
-      profileId,
-      credential: cred,
-      cfg,
-      forceRefresh: params.forceRefresh,
-    });
-    if (!resolved) {
-      return null;
-    }
-    return buildApiKeyProfileResult({
-      apiKey: resolved.apiKey,
-      provider: resolved.credential.provider,
-      email: resolved.credential.email ?? cred.email,
-      profileId,
-      profileType: cred.type,
-      credential: resolved.credential,
-    });
-  } catch (error) {
-    let refreshedStore =
-      error instanceof OAuthManagerRefreshError
-        ? error.getRefreshedStore()
-        : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
-    const surfacedCause =
-      error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
-    if (isRefreshTokenReusedError(surfacedCause)) {
-      const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
-        agentDir: params.agentDir,
-        profileId,
-      });
-      await clearLastGoodProfileWithLock({
-        provider: cred.provider,
-        profileId,
-        agentDir: ownerAgentDir,
-      });
-      if (
-        params.agentDir !== ownerAgentDir &&
-        hasRuntimeAuthProfileStoreSnapshot(params.agentDir)
-      ) {
-        const snapshot = getRuntimeAuthProfileStoreSnapshot(params.agentDir);
-        const providerKey = resolveProviderIdForAuth(cred.provider);
-        if (snapshot?.lastGood?.[providerKey] === profileId) {
-          delete snapshot.lastGood[providerKey];
-          if (Object.keys(snapshot.lastGood).length === 0) {
-            snapshot.lastGood = undefined;
-          }
-          setRuntimeAuthProfileStoreSnapshot(snapshot, params.agentDir);
-        }
-      }
-      refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
-    }
-    const fallbackProfileId =
-      params.allowProfileFallback === false
-        ? null
-        : suggestOAuthProfileIdForLegacyDefault({
-            cfg,
-            store: refreshedStore,
-            provider: cred.provider,
-            legacyProfileId: profileId,
-          });
-    if (fallbackProfileId && fallbackProfileId !== profileId) {
-      try {
-        const fallbackResolved = await tryResolveOAuthProfile({
-          cfg,
-          store: refreshedStore,
-          profileId: fallbackProfileId,
-          agentDir: params.agentDir,
-          forceRefresh: params.forceRefresh,
-        });
-        if (fallbackResolved) {
-          return fallbackResolved;
-        }
-      } catch {
-        // keep original error
-      }
-    }
-
-    const message = extractErrorMessage(surfacedCause);
-    const hint = await formatAuthDoctorHint({
-      cfg,
-      store: refreshedStore,
-      provider: cred.provider,
-      profileId,
-    });
-    throw new OAuthRefreshFailureError({
-      provider: cred.provider,
-      profileId,
-      message:
-        `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
-        "Please try again or re-authenticate." +
-        (hint ? `\n\n${hint}` : ""),
-      cause: error,
-    });
+  const resolved = await resolveOAuthProfile(params, cred);
+  if (!resolved) {
+    return null;
   }
+  return buildApiKeyProfileResult({
+    apiKey: await buildOAuthApiKey(resolved.credential.provider, resolved.credential, { cfg }),
+    provider: resolved.credential.provider,
+    email: resolved.email,
+    profileId: resolved.profileId,
+    profileType: cred.type,
+    credential: resolved.credential,
+  });
 }

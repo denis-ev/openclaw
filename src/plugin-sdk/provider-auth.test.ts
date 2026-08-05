@@ -93,6 +93,7 @@ async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
   }));
   vi.doMock("../agents/auth-profiles/oauth.js", () => ({
     resolveApiKeyForProfile,
+    resolveOAuthCredentialForProfile: vi.fn(),
   }));
   vi.doMock("../agents/auth-profiles/order.js", () => ({
     resolveAuthProfileOrder: ({ provider, store }: { provider: string; store: AuthProfileStore }) =>
@@ -552,6 +553,7 @@ describe("provider auth profile helpers", () => {
     }));
     vi.doMock("../agents/auth-profiles/oauth.js", () => ({
       resolveApiKeyForProfile,
+      resolveOAuthCredentialForProfile: vi.fn(),
     }));
     vi.doMock("../agents/auth-profiles/order.js", () => ({
       resolveAuthProfileOrder: ({
@@ -584,6 +586,61 @@ describe("provider auth profile helpers", () => {
     expect(resolveApiKeyForProfile).toHaveBeenCalledTimes(1);
     expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "openai:key" }),
+    );
+  });
+
+  it("projects only provider-ready access metadata from OAuth profile resolution", async () => {
+    vi.resetModules();
+
+    const oauthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "oauth-access",
+      refresh: "oauth-refresh",
+      idToken: "oauth-id-token",
+      accountId: "acct-openai",
+      expires: Date.now() + 60_000,
+    } as const;
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:oauth": oauthCredential,
+        "openai:key": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-profile",
+        },
+      },
+    };
+    const resolveOAuthCredentialForProfile = vi.fn(async () => oauthCredential);
+
+    vi.doMock("../agents/agent-scope-config.js", () => ({
+      resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
+    }));
+    vi.doMock("../agents/auth-profiles/oauth.js", () => ({
+      resolveApiKeyForProfile: vi.fn(),
+      resolveOAuthCredentialForProfile,
+    }));
+    vi.doMock("../agents/auth-profiles/order.js", () => ({
+      resolveAuthProfileOrder: () => ["openai:key", "openai:oauth"],
+    }));
+    vi.doMock("../agents/auth-profiles/store.js", () => ({
+      ensureAuthProfileStore: vi.fn(() => store),
+      ensureAuthProfileStoreForLocalUpdate: vi.fn(() => store),
+      loadAuthProfileStoreForSecretsRuntime: vi.fn(() => store),
+      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+      updateAuthProfileStoreWithLock: vi.fn(),
+    }));
+
+    const { resolveProviderOAuthAccess } = await import("./provider-auth.js");
+
+    await expect(resolveProviderOAuthAccess({ provider: "openai" })).resolves.toEqual({
+      accessToken: "oauth-access",
+      accountId: "acct-openai",
+    });
+    expect(resolveOAuthCredentialForProfile).toHaveBeenCalledOnce();
+    expect(resolveOAuthCredentialForProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "openai:oauth" }),
     );
   });
 
@@ -620,6 +677,7 @@ describe("provider auth profile helpers", () => {
     }));
     vi.doMock("../agents/auth-profiles/oauth.js", () => ({
       resolveApiKeyForProfile: vi.fn(),
+      resolveOAuthCredentialForProfile: vi.fn(),
     }));
     vi.doMock("../agents/auth-profiles/order.js", () => ({
       resolveAuthProfileOrder: ({

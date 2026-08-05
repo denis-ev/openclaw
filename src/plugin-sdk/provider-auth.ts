@@ -6,7 +6,10 @@ import {
 } from "../../packages/normalization-core/src/number-coercion.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
-import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
+import {
+  resolveApiKeyForProfile,
+  resolveOAuthCredentialForProfile,
+} from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
 import { resolveStoredCredentialReadOnlyAvailability } from "../agents/auth-profiles/read-only-availability.js";
@@ -617,6 +620,47 @@ export async function resolveProviderAuthProfileApiKey(params: {
     });
     if (resolved?.apiKey) {
       return resolved.apiKey;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolves the first usable OAuth profile to provider-ready access metadata.
+ *
+ * Unlike API-key resolution, this never applies provider-specific credential formatting.
+ */
+export async function resolveProviderOAuthAccess(params: {
+  /** Provider id whose first usable OAuth profile should resolve to access metadata. */
+  provider: string;
+  /** Optional runtime config used to resolve auth profile order. */
+  cfg?: OpenClawConfig;
+  /** Agent directory containing auth profiles. */
+  agentDir?: string;
+  /** Whether profile store reads may prompt for keychain-backed credentials. */
+  allowKeychainPrompt?: boolean;
+  /** Whether external CLI auth profiles may be discovered and included. */
+  includeExternalCliAuth?: boolean;
+}): Promise<{ accessToken: string; accountId?: string } | undefined> {
+  const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
+  if (!agentDir || profileIds.length === 0) {
+    return undefined;
+  }
+  for (const profileId of filterAuthProfileIdsByType(store, profileIds, {
+    ...params,
+    profileTypes: ["oauth"],
+  })) {
+    const credential = await resolveOAuthCredentialForProfile({
+      cfg: params.cfg,
+      store,
+      agentDir,
+      profileId,
+    });
+    if (credential?.access) {
+      return {
+        accessToken: credential.access,
+        ...(credential.accountId ? { accountId: credential.accountId } : {}),
+      };
     }
   }
   return undefined;

@@ -7,7 +7,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -252,43 +251,47 @@ describe("OAuthManagerRefreshError", () => {
 });
 
 describe("createOAuthManager", () => {
-  it("passes active config to OAuth API-key formatting", async () => {
-    const profileId = "openai:oauth";
-    const credential = createCredential({ expires: Date.now() + 10 * 60_000 });
-    const cfg = {
-      models: {
-        providers: {
-          openai: { auth: "oauth", baseUrl: "", models: [] },
+  it("returns a refreshed credential without provider formatting", async () => {
+    await withOAuthAgentDirs("oauth-manager-raw-refresh-", async ({ agentDir }) => {
+      const profileId = "openai:oauth";
+      const credential = createCredential({
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: Date.now() - 60_000,
+      });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: credential,
+          },
         },
-      },
-    } satisfies OpenClawConfig;
-    const buildApiKey = vi.fn(async (_provider, value: OAuthCredential) => value.access);
-    const manager = createOAuthManager({
-      buildApiKey,
-      refreshCredential: vi.fn(async () => null),
-      readBootstrapCredential: () => null,
-      isRefreshTokenReusedError: () => false,
-    });
+        agentDir,
+        { filterExternalAuthProfiles: false },
+      );
+      const manager = createOAuthManager({
+        refreshCredential: vi.fn(async () => ({
+          access: "refreshed-access",
+          refresh: "refreshed-refresh",
+          expires: Date.now() + 10 * 60_000,
+        })),
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+      });
 
-    const result = await manager.resolveOAuthAccess({
-      store: {
-        version: 1,
-        profiles: {
-          [profileId]: credential,
-        },
-      },
-      profileId,
-      credential,
-      cfg,
-    });
-    if (!result) {
-      throw new Error("Expected OAuth access result");
-    }
-    expect(result.apiKey).toBe("access-token");
+      const result = await manager.resolveOAuthCredential({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        }),
+        profileId,
+        credential,
+        agentDir,
+      });
 
-    expect(buildApiKey).toHaveBeenCalledWith("openai", credential, {
-      cfg,
-      agentDir: undefined,
+      expect(result).toMatchObject({
+        access: "refreshed-access",
+        refresh: "refreshed-refresh",
+      });
     });
   });
 
@@ -346,13 +349,12 @@ describe("createOAuthManager", () => {
         };
       });
       const manager = createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
         refreshCredential,
         readBootstrapCredential: () => null,
         isRefreshTokenReusedError: () => false,
       });
 
-      const result = await manager.resolveOAuthAccess({
+      const result = await manager.resolveOAuthCredential({
         store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
           allowKeychainPrompt: false,
         }),
@@ -365,9 +367,8 @@ describe("createOAuthManager", () => {
       if (!result) {
         throw new Error("Expected refreshed main-store OAuth result");
       }
-      expect(result.apiKey).toBe("rotated-main-access");
-      expect(result.credential.access).toBe("rotated-main-access");
-      expect(result.credential.refresh).toBe("rotated-main-refresh");
+      expect(result.access).toBe("rotated-main-access");
+      expect(result.refresh).toBe("rotated-main-refresh");
     });
   });
 
@@ -399,7 +400,6 @@ describe("createOAuthManager", () => {
         throw new Error("should not refresh poisoned local credential");
       });
       const manager = createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
         refreshCredential,
         readBootstrapCredential: () => null,
         isRefreshTokenReusedError: () => false,
@@ -411,7 +411,7 @@ describe("createOAuthManager", () => {
           [profileId]: localCredential,
         },
       };
-      const result = await manager.resolveOAuthAccess({
+      const result = await manager.resolveOAuthCredential({
         store,
         profileId,
         credential: localCredential,
@@ -419,8 +419,7 @@ describe("createOAuthManager", () => {
       });
 
       expect(refreshCredential).not.toHaveBeenCalled();
-      expect(result?.apiKey).toBe("main-access");
-      expect(result?.credential.access).toBe("main-access");
+      expect(result?.access).toBe("main-access");
       expect(store.profiles[profileId]).toMatchObject({
         type: "oauth",
         access: "main-access",
@@ -450,7 +449,6 @@ describe("createOAuthManager", () => {
       );
 
       const manager = createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
         refreshCredential: vi.fn(async (credential) => {
           expect(credential.refresh).toBe("external-refresh");
           return {
@@ -469,7 +467,7 @@ describe("createOAuthManager", () => {
         isRefreshTokenReusedError: () => false,
       });
 
-      const result = await manager.resolveOAuthAccess({
+      const result = await manager.resolveOAuthCredential({
         store: ensureAuthProfileStore(agentDir),
         profileId,
         credential: localCredential,
@@ -479,10 +477,9 @@ describe("createOAuthManager", () => {
       if (!result) {
         throw new Error("Expected refreshed external OAuth result");
       }
-      expect(result.apiKey).toBe("rotated-access");
-      expect(result.credential.provider).toBe("minimax-portal");
-      expect(result.credential.access).toBe("rotated-access");
-      expect(result.credential.refresh).toBe("rotated-refresh");
+      expect(result.provider).toBe("minimax-portal");
+      expect(result.access).toBe("rotated-access");
+      expect(result.refresh).toBe("rotated-refresh");
     });
   });
 
@@ -508,13 +505,12 @@ describe("createOAuthManager", () => {
       );
       const refreshCredential = vi.fn(async () => null);
       const manager = createOAuthManager({
-        buildApiKey: async (_provider, value) => value.access,
         refreshCredential,
         readBootstrapCredential: () => null,
         isRefreshTokenReusedError: () => false,
       });
 
-      const result = await manager.resolveOAuthAccess({
+      const result = await manager.resolveOAuthCredential({
         store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
           allowKeychainPrompt: false,
         }),
@@ -551,7 +547,6 @@ describe("createOAuthManager", () => {
       );
 
       const manager = createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
         refreshCredential: vi.fn(async () => {
           saveAuthProfileStore(
             {
@@ -578,7 +573,7 @@ describe("createOAuthManager", () => {
         isRefreshTokenReusedError: () => false,
       });
 
-      const result = await manager.resolveOAuthAccess({
+      const result = await manager.resolveOAuthCredential({
         store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
           allowKeychainPrompt: false,
         }),
@@ -587,7 +582,7 @@ describe("createOAuthManager", () => {
         agentDir,
       });
 
-      expect(result?.apiKey).toBe("rotated-access");
+      expect(result?.access).toBe("rotated-access");
       const persisted = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
         allowKeychainPrompt: false,
       });
@@ -631,7 +626,6 @@ describe("createOAuthManager", () => {
       );
 
       const manager = createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
         refreshCredential: vi.fn(async () => {
           saveAuthProfileStore(
             {
@@ -653,7 +647,7 @@ describe("createOAuthManager", () => {
         isRefreshTokenReusedError: () => false,
       });
 
-      const result = await manager.resolveOAuthAccess({
+      const result = await manager.resolveOAuthCredential({
         store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
           allowKeychainPrompt: false,
         }),
@@ -662,7 +656,7 @@ describe("createOAuthManager", () => {
         agentDir,
       });
 
-      expect(result?.apiKey).toBe("relogged-access");
+      expect(result?.access).toBe("relogged-access");
       const persisted = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
         allowKeychainPrompt: false,
       });
@@ -696,7 +690,6 @@ describe("createOAuthManager", () => {
         { filterExternalAuthProfiles: false },
       );
       const manager = createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
         refreshCredential: vi.fn(async () => {
           throw new Error("refresh rejected managed profile");
         }),
@@ -705,7 +698,7 @@ describe("createOAuthManager", () => {
       });
 
       await expect(
-        manager.resolveOAuthAccess({
+        manager.resolveOAuthCredential({
           store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
             allowKeychainPrompt: false,
           }),
@@ -747,7 +740,6 @@ describe("createOAuthManager", () => {
       );
 
       const manager = createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
         refreshCredential: vi.fn(async () => {
           throw new Error(
             "refresh rejected external-attempt-access external-attempt-refresh external-attempt-id-token",
@@ -758,7 +750,7 @@ describe("createOAuthManager", () => {
       });
 
       try {
-        await manager.resolveOAuthAccess({
+        await manager.resolveOAuthCredential({
           store: ensureAuthProfileStore(agentDir),
           profileId,
           credential: localCredential,
