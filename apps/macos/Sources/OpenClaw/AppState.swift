@@ -260,12 +260,10 @@ final class AppState {
 
     var talkRealtimeRelayEnabled: Bool {
         didSet {
-            self.ifNotPreview {
-                UserDefaults.standard.set(self.talkRealtimeRelayEnabled, forKey: talkRealtimeRelayEnabledKey)
-                if self.talkEnabled, self.talkRealtimeRelayEnabled != oldValue {
-                    Task { await TalkModeRuntime.shared.realtimeRelayPreferenceDidChange() }
-                }
-            }
+            guard !self.isPreview else { return }
+            UserDefaults.standard.set(self.talkRealtimeRelayEnabled, forKey: talkRealtimeRelayEnabledKey)
+            guard self.talkEnabled, self.talkRealtimeRelayEnabled != oldValue else { return }
+            Task { await TalkModeRuntime.shared.realtimeRelayPreferenceDidChange() }
         }
     }
 
