@@ -54,7 +54,7 @@ actor TalkModeRuntime {
     private var activeInputResolution: AudioInputDeviceResolution?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var recognitionGeneration: Int = 0
+    var recognitionGeneration: Int = 0
     private var rmsTask: Task<Void, Never>?
     private let rmsMeter = RMSMeter()
 
@@ -184,12 +184,14 @@ actor TalkModeRuntime {
             self.lastHeard = nil
             self.lastSpeechEnergyAt = nil
             await MainActor.run { TalkModeController.shared.updatePartialTranscript("") }
-            await self.stopRecognition()
+            self.stopRecognition()
             return
         }
 
         if self.phase == .idle || self.phase == .listening {
-            await self.startRecognition()
+            let lifecycleGeneration = self.lifecycleGeneration
+            guard await self.startRecognition(lifecycleGeneration: lifecycleGeneration),
+                  self.isCurrent(lifecycleGeneration), !self.isPaused else { return }
             self.phase = .listening
             await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
             self.startSilenceMonitor()
@@ -262,7 +264,7 @@ actor TalkModeRuntime {
         self.lastHeard = nil
         self.lastSpeechEnergyAt = nil
         self.phase = .idle
-        await self.stopRecognition()
+        self.stopRecognition()
         await MainActor.run {
             TalkModeController.shared.updateLevel(0)
             TalkModeController.shared.updatePartialTranscript("")
@@ -271,9 +273,9 @@ actor TalkModeRuntime {
     }
 
     private func startNativeFallback(generation: Int) async {
+        guard await self.startRecognition(lifecycleGeneration: generation),
+              self.isCurrent(generation), !self.isPaused else { return }
         self.startAudioInputObserver()
-        await self.startRecognition()
-        guard self.isCurrent(generation), !self.isPaused else { return }
         self.phase = .listening
         await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
         self.startSilenceMonitor()
@@ -299,7 +301,8 @@ actor TalkModeRuntime {
         }
         guard self.isEnabled, !self.isPaused, self.phase == .listening else { return }
         self.logger.info("talk input selection changed; restarting capture")
-        await self.startRecognition()
+        let lifecycleGeneration = self.lifecycleGeneration
+        _ = await self.startRecognition(lifecycleGeneration: lifecycleGeneration)
     }
 
     private func startAudioInputObserver() {
@@ -313,9 +316,10 @@ actor TalkModeRuntime {
 
     private func audioInputDevicesDidChange() async {
         guard self.isEnabled, !self.isPaused, self.phase == .listening else { return }
+        let lifecycleGeneration = self.lifecycleGeneration
         let availableUIDs = AudioInputDeviceObserver.aliveInputDeviceUIDs()
         guard let activeInputResolution else {
-            await self.startRecognition()
+            _ = await self.startRecognition(lifecycleGeneration: lifecycleGeneration)
             return
         }
         guard activeInputResolution.shouldRestart(
@@ -324,7 +328,7 @@ actor TalkModeRuntime {
         else { return }
 
         self.logger.warning("talk active/default input changed; restarting capture")
-        await self.startRecognition()
+        _ = await self.startRecognition(lifecycleGeneration: lifecycleGeneration)
     }
 
     private func shouldAttemptRealtimeRelay() -> Bool {
@@ -362,12 +366,13 @@ actor TalkModeRuntime {
         let generation: Int
     }
 
-    private func startRecognition() async {
-        await self.stopRecognition()
+    private func startRecognition(lifecycleGeneration: Int) async -> Bool {
         self.recognitionGeneration &+= 1
-        let generation = self.recognitionGeneration
+        let recognitionAttempt = self.recognitionGeneration
+        self.discardRecognitionResources()
 
         let voiceWakeLocale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        let selectedInputUID = await MainActor.run { AppStateStore.shared.voiceWakeMicID }
         let supportedLocaleIDs = Set(SFSpeechRecognizer.supportedLocales().map(\.identifier))
         let localeID = TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
             preferredLocaleIDs: [
@@ -376,32 +381,35 @@ actor TalkModeRuntime {
                 Locale.autoupdatingCurrent.identifier,
             ],
             supportedLocaleIDs: supportedLocaleIDs)
-        self.recognizer = localeID
+        let recognizer = localeID
             .map { SFSpeechRecognizer(locale: Locale(identifier: $0)) }
             ?? SFSpeechRecognizer()
         guard let recognizer, recognizer.isAvailable else {
             self.logger.error("talk recognizer unavailable")
-            return
+            return false
         }
         self.logger.debug("talk recognizer locale=\(recognizer.locale.identifier, privacy: .public)")
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         Self.configureRecognitionRequest(request)
-        self.recognitionRequest = request
 
-        let selectedInputUID = await MainActor.run { AppStateStore.shared.voiceWakeMicID }
         let selection = AudioInputDeviceObserver.resolveSelection(selectedInputUID)
+        // Preparation above crosses MainActor. Hardware can become owned/running only
+        // after this lifecycle and recognition attempt are revalidated together.
+        guard self.canCommitRecognitionStart(
+            lifecycleGeneration: lifecycleGeneration,
+            recognitionAttempt: recognitionAttempt) else { return false }
+
         // AVAudioEngine materializes inputNode from the system default before CurrentDevice can bind.
         // Without a usable default, accessing inputNode can SIGABRT even when another UID is alive.
         guard selection.resolvedUID != nil, AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
-            self.audioEngine = nil
-            self.activeInputResolution = nil
             self.logger.error("talk mode: no usable audio input device")
-            return
+            return false
         }
 
+        let preparedAudio: (engine: AVAudioEngine, activeInputResolution: AudioInputDeviceResolution)
         do {
-            try self.configureAudioEngine(
+            preparedAudio = try self.prepareAudioEngine(
                 selection: selection,
                 request: request,
                 enableVoiceProcessing: true)
@@ -409,38 +417,65 @@ actor TalkModeRuntime {
             self.logger.warning(
                 "talk processed input setup failed; retrying without voice processing: " +
                     "\(error.localizedDescription, privacy: .public)")
-            self.discardAudioEngine()
             do {
-                try self.configureAudioEngine(
+                preparedAudio = try self.prepareAudioEngine(
                     selection: selection,
                     request: request,
                     enableVoiceProcessing: false)
             } catch {
-                self.discardAudioEngine()
                 self.logger.error(
                     "talk audio engine start failed: \(error.localizedDescription, privacy: .public)")
-                return
+                return false
             }
         }
 
-        self.startRMSTicker(meter: self.rmsMeter)
-
-        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self, generation] result, error in
-            guard let self else { return }
-            let segments = result?.bestTranscription.segments ?? []
-            let transcript = result?.bestTranscription.formattedString
-            let update = RecognitionUpdate(
-                transcript: transcript,
-                hasConfidence: segments.contains { $0.confidence > 0.6 },
-                isFinal: result?.isFinal ?? false,
-                errorDescription: error?.localizedDescription,
-                generation: generation)
-            Task { await self.handleRecognition(update) }
+        self.recognizer = recognizer
+        self.recognitionRequest = request
+        self.audioEngine = preparedAudio.engine
+        self.activeInputResolution = preparedAudio.activeInputResolution
+        do {
+            try preparedAudio.engine.start()
+        } catch {
+            self.discardRecognitionResources(
+                recognitionAttempt: recognitionAttempt,
+                audioEngine: preparedAudio.engine)
+            self.logger.error(
+                "talk audio engine start failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
+        self.recognitionTask = recognizer.recognitionTask(
+            with: request,
+            resultHandler: { [weak self, recognitionAttempt] result, error in
+                guard let self else { return }
+                let segments = result?.bestTranscription.segments ?? []
+                let transcript = result?.bestTranscription.formattedString
+                let update = RecognitionUpdate(
+                    transcript: transcript,
+                    hasConfidence: segments.contains { $0.confidence > 0.6 },
+                    isFinal: result?.isFinal ?? false,
+                    errorDescription: error?.localizedDescription,
+                    generation: recognitionAttempt)
+                Task { await self.handleRecognition(update) }
+            })
+        self.startRMSTicker(meter: self.rmsMeter)
+        return true
     }
 
-    private func stopRecognition() async {
+    func canCommitRecognitionStart(lifecycleGeneration: Int, recognitionAttempt: Int) -> Bool {
+        self.isCurrent(lifecycleGeneration) && !self.isPaused && self.recognitionGeneration == recognitionAttempt
+    }
+
+    private func stopRecognition() {
         self.recognitionGeneration &+= 1
+        self.discardRecognitionResources()
+    }
+
+    func discardRecognitionResources(
+        recognitionAttempt: Int? = nil,
+        audioEngine expectedAudioEngine: AVAudioEngine? = nil)
+    {
+        if let recognitionAttempt, self.recognitionGeneration != recognitionAttempt { return }
+        if let expectedAudioEngine, self.audioEngine !== expectedAudioEngine { return }
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
         self.recognitionRequest?.endAudio()
@@ -551,7 +586,7 @@ actor TalkModeRuntime {
         if sendChime != .none {
             await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "talk.send") }
         }
-        await self.stopRecognition()
+        self.stopRecognition()
         await sendAndSpeak(text)
     }
 
@@ -585,13 +620,13 @@ actor TalkModeRuntime {
         return selection
     }
 
-    private func configureAudioEngine(
+    private func prepareAudioEngine(
         selection: AudioInputDeviceResolution,
         request: SFSpeechAudioBufferRecognitionRequest,
-        enableVoiceProcessing: Bool) throws
+        enableVoiceProcessing: Bool)
+        throws -> (engine: AVAudioEngine, activeInputResolution: AudioInputDeviceResolution)
     {
         let audioEngine = AVAudioEngine()
-        self.audioEngine = audioEngine
         let input = audioEngine.inputNode
         if enableVoiceProcessing {
             do {
@@ -619,15 +654,7 @@ actor TalkModeRuntime {
             meter.set(TalkAudioLevel.rms(buffer: buffer))
         }
         audioEngine.prepare()
-        try audioEngine.start()
-        self.activeInputResolution = activeResolution
-    }
-
-    private func discardAudioEngine() {
-        self.audioEngine?.inputNode.removeTap(onBus: 0)
-        self.audioEngine?.stop()
-        self.audioEngine = nil
-        self.activeInputResolution = nil
+        return (audioEngine, activeResolution)
     }
 
     private func defaultFallback(for selection: AudioInputDeviceResolution) -> AudioInputDeviceResolution {
@@ -717,8 +744,9 @@ extension TalkModeRuntime {
             guard let assistantText
             else {
                 self.logger.warning("talk assistant text missing after timeout")
+                guard await self.startRecognition(lifecycleGeneration: gen),
+                      self.isCurrent(gen), !self.isPaused else { return }
                 await self.startListening()
-                await self.startRecognition()
                 return
             }
             guard self.isCurrent(gen) else { return }
@@ -745,8 +773,10 @@ extension TalkModeRuntime {
             }
             return
         }
+        let lifecycleGeneration = self.lifecycleGeneration
+        guard await self.startRecognition(lifecycleGeneration: lifecycleGeneration),
+              self.isCurrent(lifecycleGeneration), !self.isPaused else { return }
         await self.startListening()
-        await self.startRecognition()
     }
 
     private func buildPrompt(transcript: String) -> String {
@@ -1247,8 +1277,8 @@ extension TalkModeRuntime {
     }
 
     private func prepareForPlayback(generation: Int) async -> Bool {
-        await self.startRecognition()
-        return self.isCurrent(generation)
+        guard await self.startRecognition(lifecycleGeneration: generation) else { return false }
+        return self.isCurrent(generation) && !self.isPaused
     }
 
     private func resolveVoiceId(preferred: String?, apiKey: String) async -> String? {

@@ -33,6 +33,63 @@ private final class RuntimeTestPCMPlayer: PCMStreamingAudioPlaying {
     }
 }
 
+private actor RuntimeContinuationBarrier {
+    private var entered = false
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        self.entered = true
+        self.entryWaiters.forEach { $0.resume() }
+        self.entryWaiters.removeAll()
+        await withCheckedContinuation { continuation in
+            self.releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilEntered() async {
+        if self.entered { return }
+        await withCheckedContinuation { continuation in
+            self.entryWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        self.releaseContinuation?.resume()
+        self.releaseContinuation = nil
+    }
+}
+
+private final class RuntimeCommitProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedValues: [String] = []
+
+    func record(_ value: String) {
+        self.lock.withLock {
+            self.recordedValues.append(value)
+        }
+    }
+
+    func values() -> [String] {
+        self.lock.withLock { self.recordedValues }
+    }
+}
+
+@MainActor
+private func makeRuntimeTestRealtimeSession(
+    player: RuntimeTestPCMPlayer) -> RealtimeTalkRelaySession
+{
+    RealtimeTalkRelaySession(
+        transport: RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { _, _, _ in Data("{\"ok\":true}".utf8) }),
+        options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+        audioCapture: RuntimeTestAudioCapture(),
+        pcmPlayer: player,
+        onStatus: { _ in },
+        onSpeakingChanged: { _ in })
+}
+
 struct TalkModeRuntimeSpeechTests {
     @Test func `macOS realtime relay requires local opt in and exact Gateway tuple`() {
         #expect(!TalkModeRuntime.shouldUseRealtimeRelay(
@@ -205,6 +262,183 @@ struct TalkModeRuntimeSpeechTests {
 
         await runtime._test_cancelRealtimeRecovery()
         session.stop()
+    }
+
+    @Test @MainActor func `disabling during relay startup stops the published session`() async {
+        let runtime = TalkModeRuntime()
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        let barrier = RuntimeContinuationBarrier()
+        let probe = RuntimeCommitProbe()
+        let player = RuntimeTestPCMPlayer()
+        let session = makeRuntimeTestRealtimeSession(player: player)
+        let attempt = Task { @MainActor in
+            do {
+                try await runtime._test_startRealtimeRelay(
+                    lifecycleGeneration: lifecycleGeneration,
+                    makeSession: { session },
+                    start: { _ in
+                        probe.record("start")
+                        await barrier.wait()
+                    })
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        await barrier.waitUntilEntered()
+        #expect(await runtime._test_realtimeSessionIs(session))
+        await runtime.setEnabled(false)
+        await barrier.release()
+
+        #expect(await attempt.value == false)
+        #expect(await runtime._test_realtimeSessionIsActive() == false)
+        #expect(probe.values() == ["start"])
+        #expect(player.stopCount == 1)
+    }
+
+    @Test @MainActor func `pausing during relay startup stops the published session`() async {
+        let runtime = TalkModeRuntime()
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        let barrier = RuntimeContinuationBarrier()
+        let probe = RuntimeCommitProbe()
+        let player = RuntimeTestPCMPlayer()
+        let session = makeRuntimeTestRealtimeSession(player: player)
+        let attempt = Task { @MainActor in
+            do {
+                try await runtime._test_startRealtimeRelay(
+                    lifecycleGeneration: lifecycleGeneration,
+                    makeSession: { session },
+                    start: { _ in
+                        probe.record("start")
+                        await barrier.wait()
+                    })
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        await barrier.waitUntilEntered()
+        #expect(await runtime._test_realtimeSessionIs(session))
+        await runtime.setPaused(true)
+        await barrier.release()
+
+        #expect(await attempt.value == false)
+        #expect(await runtime._test_realtimeSessionIsActive() == false)
+        #expect(probe.values() == ["start"])
+        #expect(player.stopCount == 2)
+
+        await runtime.setEnabled(false)
+    }
+
+    @Test @MainActor func `disabling during recognition preparation prevents capture commit`() async {
+        let runtime = TalkModeRuntime()
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        let barrier = RuntimeContinuationBarrier()
+        let probe = RuntimeCommitProbe()
+        let attempt = Task {
+            await runtime._test_startRecognitionAttempt(
+                lifecycleGeneration: lifecycleGeneration,
+                prepare: { await barrier.wait() },
+                commit: { probe.record("commit") })
+        }
+
+        await barrier.waitUntilEntered()
+        await runtime.setEnabled(false)
+        await barrier.release()
+
+        #expect(await attempt.value == false)
+        #expect(probe.values().isEmpty)
+    }
+
+    @Test @MainActor func `pausing during recognition preparation prevents capture commit`() async {
+        let runtime = TalkModeRuntime()
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        let barrier = RuntimeContinuationBarrier()
+        let probe = RuntimeCommitProbe()
+        let attempt = Task {
+            await runtime._test_startRecognitionAttempt(
+                lifecycleGeneration: lifecycleGeneration,
+                prepare: { await barrier.wait() },
+                commit: { probe.record("commit") })
+        }
+
+        await barrier.waitUntilEntered()
+        await runtime.setPaused(true)
+        await barrier.release()
+
+        #expect(await attempt.value == false)
+        #expect(probe.values().isEmpty)
+
+        await runtime.setEnabled(false)
+    }
+
+    @Test @MainActor func `stale relay cleanup cannot clear a newer owned session`() async {
+        let runtime = TalkModeRuntime()
+        let lifecycleA = await runtime._test_prepareEnabledLifecycle()
+        let barrier = RuntimeContinuationBarrier()
+        let playerA = RuntimeTestPCMPlayer()
+        let sessionA = makeRuntimeTestRealtimeSession(player: playerA)
+        let attemptA = Task { @MainActor in
+            do {
+                try await runtime._test_startRealtimeRelay(
+                    lifecycleGeneration: lifecycleA,
+                    makeSession: {
+                        await barrier.wait()
+                        return sessionA
+                    },
+                    start: { _ in })
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        await barrier.waitUntilEntered()
+        await runtime.setEnabled(false)
+        let lifecycleB = await runtime._test_prepareEnabledLifecycle()
+        let playerB = RuntimeTestPCMPlayer()
+        let sessionB = makeRuntimeTestRealtimeSession(player: playerB)
+        try? await runtime._test_startRealtimeRelay(
+            lifecycleGeneration: lifecycleB,
+            makeSession: { sessionB },
+            start: { _ in })
+        await barrier.release()
+
+        #expect(await attemptA.value == false)
+        #expect(await runtime._test_realtimeSessionIs(sessionB))
+        #expect(playerA.stopCount == 1)
+        #expect(playerB.stopCount == 0)
+
+        await runtime._test_cancelRealtimeRecovery()
+        sessionB.stop()
+    }
+
+    @Test @MainActor func `stale recognition attempt cannot commit after a newer attempt`() async {
+        let runtime = TalkModeRuntime()
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        let barrier = RuntimeContinuationBarrier()
+        let probe = RuntimeCommitProbe()
+        let attemptA = Task {
+            await runtime._test_startRecognitionAttempt(
+                lifecycleGeneration: lifecycleGeneration,
+                prepare: { await barrier.wait() },
+                commit: { probe.record("A") })
+        }
+
+        await barrier.waitUntilEntered()
+        let attemptB = await runtime._test_startRecognitionAttempt(
+            lifecycleGeneration: lifecycleGeneration,
+            prepare: {},
+            commit: { probe.record("B") })
+        await barrier.release()
+
+        #expect(attemptB)
+        #expect(await attemptA.value == false)
+        #expect(probe.values() == ["B"])
+
+        await runtime.setEnabled(false)
     }
 
     @Test func `talk speak params carry resolved voice and directive overrides`() {
