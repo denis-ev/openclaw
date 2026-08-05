@@ -68,7 +68,14 @@ import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
-import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
+import {
+  bindNormalizedUsageObservedBuckets,
+  hasNonzeroUsage,
+  normalizeUsage,
+  resolveNormalizedUsageObservedBuckets,
+  type NormalizedUsageBucket,
+  type UsageLike,
+} from "./usage.js";
 
 const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
   "final",
@@ -292,6 +299,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     reasoningTokens: 0,
     total: 0,
   };
+  let usageTotalsObserved: Set<NormalizedUsageBucket> | undefined;
   let lastAssistantUsage: ReturnType<typeof normalizeUsage>;
   let compactionCount = 0;
   let currentAttemptAssistant: AssistantMessage | undefined;
@@ -713,6 +721,16 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     const usage = state.pendingAssistantUsage;
+    const observedBuckets = resolveNormalizedUsageObservedBuckets(usage);
+    if (!usageTotalsObserved) {
+      usageTotalsObserved = new Set(observedBuckets);
+    } else {
+      for (const bucket of usageTotalsObserved) {
+        if (!observedBuckets.has(bucket)) {
+          usageTotalsObserved.delete(bucket);
+        }
+      }
+    }
     usageTotals.input += usage.input ?? 0;
     usageTotals.output += usage.output ?? 0;
     usageTotals.cacheRead += usage.cacheRead ?? 0;
@@ -740,6 +758,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
   const getUsageTotals = () => {
     const hasUsage =
+      (usageTotalsObserved?.size ?? 0) > 0 ||
       usageTotals.input > 0 ||
       usageTotals.output > 0 ||
       usageTotals.cacheRead > 0 ||
@@ -751,14 +770,29 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
     const derivedTotal =
       usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite;
-    return {
-      input: usageTotals.input || undefined,
-      output: usageTotals.output || undefined,
-      cacheRead: usageTotals.cacheRead || undefined,
-      cacheWrite: usageTotals.cacheWrite || undefined,
-      ...(usageTotals.reasoningTokens > 0 ? { reasoningTokens: usageTotals.reasoningTokens } : {}),
-      total: usageTotals.total || derivedTotal || undefined,
-    };
+    return bindNormalizedUsageObservedBuckets(
+      {
+        input: usageTotalsObserved?.has("input")
+          ? usageTotals.input
+          : usageTotals.input || undefined,
+        output: usageTotalsObserved?.has("output")
+          ? usageTotals.output
+          : usageTotals.output || undefined,
+        cacheRead: usageTotalsObserved?.has("cacheRead")
+          ? usageTotals.cacheRead
+          : usageTotals.cacheRead || undefined,
+        cacheWrite: usageTotalsObserved?.has("cacheWrite")
+          ? usageTotals.cacheWrite
+          : usageTotals.cacheWrite || undefined,
+        ...(usageTotalsObserved?.has("reasoningTokens") || usageTotals.reasoningTokens > 0
+          ? { reasoningTokens: usageTotals.reasoningTokens }
+          : {}),
+        total: usageTotalsObserved?.has("total")
+          ? usageTotals.total
+          : usageTotals.total || derivedTotal || undefined,
+      },
+      usageTotalsObserved ?? [],
+    );
   };
   const getLastAssistantUsage = () => (lastAssistantUsage ? { ...lastAssistantUsage } : undefined);
   const incrementCompactionCount = () => {
