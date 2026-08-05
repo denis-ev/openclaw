@@ -55,9 +55,8 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       logger: { debug: vi.fn(), warn: vi.fn() },
       resolveAuth: vi.fn(async () => ({
-        type: "oauth" as const,
-        token: "oauth-token",
-        accountId: "account-1",
+        type: "api-key" as const,
+        token: "platform-key",
       })),
       createPeer: vi.fn((callbacks) => {
         peerCallbacks = callbacks;
