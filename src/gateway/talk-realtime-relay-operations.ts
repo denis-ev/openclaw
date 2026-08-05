@@ -28,6 +28,7 @@ import {
   MAX_RELAY_SESSIONS_PER_CONN,
   broadcastRelayTurnStarted,
   broadcastToOwner,
+  clearTalkRealtimeRelayOutputGeneration,
   drainingRelaySessions,
   ensureRelayTurn,
   noFallbackRelayOutputFlush,
@@ -553,17 +554,13 @@ export function cancelTalkRealtimeRelayOutput(params: {
     return;
   }
   const reason = params.reason ?? "output-cancelled";
+  const outputGeneration = session.outputGeneration;
+  session.pendingProviderClearGeneration = outputGeneration;
   session.harness.handleBargeIn({ audioPlaybackActive: true }, () => {
-    const outputDone = activeTurnId
-      ? session.harness.talk.finishOutputAudio({
-          turnId: activeTurnId,
-          payload: { reason },
-        })
-      : undefined;
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
-      type: "clear",
-      ...(outputDone ? { talkEvent: outputDone } : {}),
+    clearTalkRealtimeRelayOutputGeneration({
+      session,
+      generation: outputGeneration,
+      reason,
     });
   });
 }

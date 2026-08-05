@@ -2831,6 +2831,53 @@ describe("talk realtime gateway relay", () => {
     ).toHaveLength(1);
   });
 
+  it("ignores a delayed provider clear from the replaced output generation", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    let deliverProviderClear: (() => void) | undefined;
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn: vi.fn(() => {
+        deliverProviderClear = () => bridgeRequest?.onClearAudio("barge-in");
+      }),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return bridge;
+      },
+    };
+    const { broadcastToConnIds, session } = createAbortableRelayRunFixture(provider);
+    bridgeRequest?.onAudio(Buffer.from("first output"));
+
+    cancelTalkRealtimeRelayOutput({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      reason: "barge-in",
+    });
+
+    const clearCount = () =>
+      broadcastToConnIds.mock.calls.filter(
+        (call) => (call[1] as { type?: string }).type === "clear",
+      ).length;
+    expect(clearCount()).toBe(1);
+
+    bridgeRequest?.onAudio(Buffer.from("replacement output"));
+    deliverProviderClear?.();
+    expect(clearCount()).toBe(1);
+
+    bridgeRequest?.onClearAudio("barge-in");
+    expect(clearCount()).toBe(2);
+  });
+
   it("ignores an output cancellation for a turn that is no longer active", () => {
     const handleBargeIn = vi.fn();
     const provider = createIdleRelayProvider();
