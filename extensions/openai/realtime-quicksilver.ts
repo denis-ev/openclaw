@@ -3,7 +3,8 @@
 
 const OPENAI_GPT_LIVE_MODEL_PREFIX = "gpt-live";
 
-const OPENAI_GPT_LIVE_MODELS = ["gpt-live-1-boulder-alpha"] as const;
+export const OPENAI_GPT_LIVE_MODEL = "gpt-live-1-boulder-alpha";
+const OPENAI_GPT_LIVE_MODELS = [OPENAI_GPT_LIVE_MODEL] as const;
 
 export function isOpenAIGptLiveModel(model: string | undefined): boolean {
   if (!model) {
