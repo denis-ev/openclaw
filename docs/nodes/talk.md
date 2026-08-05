@@ -99,8 +99,8 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 ```
 
 OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Set
-`talk.realtime.model` to `gpt-live-1-codex` (recommended) or
-`gpt-live-1-boulder-alpha`; `gpt-live-1` and `gpt-live-1-mini` are not valid.
+`talk.realtime.model` to `gpt-live-1-boulder-alpha`; `gpt-live-1-codex`,
+`gpt-live-1`, and `gpt-live-1-mini` are not valid.
 GPT-Live requires Platform API-key auth through the Frameless Bidi `/v1/live`
 route, whose access is currently
 [waitlist-gated](https://openai.com/form/gpt-live-1-in-the-api/).
