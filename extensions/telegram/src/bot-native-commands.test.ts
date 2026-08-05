@@ -279,6 +279,35 @@ describe("registerTelegramNativeCommands", () => {
     );
   });
 
+  it("keeps configured commands ahead of automatic commands when truncating the menu", async () => {
+    const { bot, setMyCommands } = createCommandBot();
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue(
+      Array.from({ length: 100 }, (_, index) => ({
+        name: `generated_${index}`,
+        description: `Generated command ${index}`,
+      })) as never,
+    );
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({ commands: { native: true } }, { bot }),
+      telegramCfg: {
+        customCommands: [
+          { command: "operator_backup", description: "Operator backup" },
+          { command: "operator_generate", description: "Operator generate" },
+        ],
+      } as TelegramAccountConfig,
+    });
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expect(registeredCommands).toHaveLength(100);
+    expect(registeredCommands.slice(0, 2)).toEqual([
+      { command: "operator_backup", description: "Operator backup" },
+      { command: "operator_generate", description: "Operator generate" },
+    ]);
+    expect(registeredCommands.some((entry) => entry.command === "generated_0")).toBe(true);
+    expect(registeredCommands.some((entry) => entry.command === "generated_99")).toBe(false);
+  });
+
   it("keeps sub-100 commands by shortening long descriptions to fit Telegram payload budget", async () => {
     const customCommands = Array.from({ length: 92 }, (_, index) => ({
       command: `cmd_${index}`,

@@ -130,9 +130,9 @@ describe("createTelegramBot command menu", () => {
       description: command.description,
     }));
     expect(registered).toStrictEqual([
-      ...native,
       { command: "custom_backup", description: "Git backup" },
       { command: "custom_generate", description: "Create an image" },
+      ...native,
     ]);
   });
 
@@ -188,8 +188,8 @@ describe("createTelegramBot command menu", () => {
       throw new Error("expected native Telegram status command");
     }
     expect(registered).toStrictEqual([
-      ...native,
       { command: "custom_backup", description: "Git backup" },
+      ...native,
     ]);
     expect(registered.find((command) => command.command === "status")).toEqual(nativeStatus);
     expect(countMatching(registered, (command) => command.command === "status")).toBe(1);

@@ -981,6 +981,7 @@ export const registerTelegramNativeCommands = ({
       runtime.error?.(danger(issue));
     }
     const allCommandsFull: TelegramMenuCommand[] = [
+      ...customCommands,
       ...nativeCommands
         .map((command): TelegramMenuCommand | null => {
           const normalized = normalizeTelegramCommandName(command.name);
@@ -1006,7 +1007,6 @@ export const registerTelegramNativeCommands = ({
         })
         .filter((cmd) => cmd !== null),
       ...(nativeEnabled ? pluginCatalog.commands : []),
-      ...customCommands,
     ];
     return {
       nativeCommands,
