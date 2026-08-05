@@ -45,11 +45,18 @@ type RealtimeVoiceSessionHarnessTalkPayloads = {
   inputAudioDelta: (audio: Buffer) => unknown;
   outputAudioStarted: () => unknown;
   outputAudioDelta: (audio: Buffer) => unknown;
-  outputAudioDone: (reason: string, details?: RealtimeVoiceOutputAudioDoneDetails) => unknown;
+  outputAudioDone: (reason: string) => unknown;
 };
 
 type RealtimeVoiceOutputAudioDoneDetails = {
   markName?: string;
+};
+
+type RealtimeVoiceEventCapturingTalkPayloads = Omit<
+  RealtimeVoiceSessionHarnessTalkPayloads,
+  "outputAudioDone"
+> & {
+  outputAudioDone: (reason: string, details?: RealtimeVoiceOutputAudioDoneDetails) => unknown;
 };
 
 type RealtimeVoiceSessionHarnessEchoSuppression = {
@@ -112,27 +119,34 @@ type RealtimeVoiceSessionHarnessBase<TForcedConsultContext> = {
   recordTranscript(role: RealtimeVoiceRole, text: string): RealtimeVoiceTranscriptEntry;
 };
 
-type RealtimeVoiceSessionHarnessMethods<TReturnEvents extends boolean> = {
-  ensureTurn(): TReturnEvents extends true ? TalkEnsureTurnResult : string;
-  endTurn(reason?: string): TReturnEvents extends true ? TalkTurnResult : void;
+type RealtimeVoiceSessionHarnessMethods = {
+  ensureTurn(): string;
+  endTurn(reason?: string): void;
+  finishOutputAudio(reason: string): void;
+  recordInputAudio(audio: Buffer): boolean;
+  recordOutputAudio(audio: Buffer, activity?: RealtimeVoiceOutputActivityDelta): void;
+};
+
+type RealtimeVoiceEventCapturingSessionHarnessMethods = {
+  ensureTurn(): TalkEnsureTurnResult;
+  endTurn(reason?: string): TalkTurnResult;
   finishOutputAudio(
     reason: string,
     details?: RealtimeVoiceOutputAudioDoneDetails,
-  ): TReturnEvents extends true ? TalkEvent | undefined : void;
-  recordInputAudio(
-    audio: Buffer,
-  ): TReturnEvents extends true ? RealtimeVoiceInputAudioEvents | undefined : boolean;
+  ): TalkEvent | undefined;
+  recordInputAudio(audio: Buffer): RealtimeVoiceInputAudioEvents | undefined;
   recordOutputAudio(
     audio: Buffer,
     activity?: RealtimeVoiceOutputActivityDelta,
-  ): TReturnEvents extends true ? RealtimeVoiceOutputAudioEvents : void;
+  ): RealtimeVoiceOutputAudioEvents;
 };
 
-export type RealtimeVoiceSessionHarness<
-  TForcedConsultContext = unknown,
-  TReturnEvents extends boolean = false,
-> = RealtimeVoiceSessionHarnessBase<TForcedConsultContext> &
-  RealtimeVoiceSessionHarnessMethods<TReturnEvents>;
+export type RealtimeVoiceSessionHarness<TForcedConsultContext = unknown> =
+  RealtimeVoiceSessionHarnessBase<TForcedConsultContext> & RealtimeVoiceSessionHarnessMethods;
+
+export type RealtimeVoiceEventCapturingSessionHarness<TForcedConsultContext = unknown> =
+  RealtimeVoiceSessionHarnessBase<TForcedConsultContext> &
+    RealtimeVoiceEventCapturingSessionHarnessMethods;
 
 type RealtimeVoiceSessionHarnessImplementation<TForcedConsultContext> =
   RealtimeVoiceSessionHarnessBase<TForcedConsultContext> & {
@@ -160,17 +174,36 @@ type RealtimeVoiceSessionHarnessParams = {
   captureBridgeEvents?: boolean;
 };
 
+type RealtimeVoiceEventCapturingSessionHarnessParams = Omit<
+  RealtimeVoiceSessionHarnessParams,
+  "talkPayloads"
+> & {
+  talkPayloads: RealtimeVoiceEventCapturingTalkPayloads;
+};
+
 export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknown>(
-  params: RealtimeVoiceSessionHarnessParams & { returnEvents: true },
-): RealtimeVoiceSessionHarness<TForcedConsultContext, true>;
-export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknown>(
-  params: RealtimeVoiceSessionHarnessParams & { returnEvents?: false },
-): RealtimeVoiceSessionHarness<TForcedConsultContext>;
-export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknown>(
-  params: RealtimeVoiceSessionHarnessParams & { returnEvents?: boolean },
-):
-  | RealtimeVoiceSessionHarness<TForcedConsultContext>
-  | RealtimeVoiceSessionHarness<TForcedConsultContext, true> {
+  params: RealtimeVoiceSessionHarnessParams,
+): RealtimeVoiceSessionHarness<TForcedConsultContext> {
+  return createRealtimeVoiceSessionHarnessImplementation(
+    params,
+    false,
+  ) as RealtimeVoiceSessionHarness<TForcedConsultContext>;
+}
+
+/** Gateway-internal factory that returns the exact Talk events emitted by each helper. */
+export function createRealtimeVoiceEventCapturingSessionHarness<TForcedConsultContext = unknown>(
+  params: RealtimeVoiceEventCapturingSessionHarnessParams,
+): RealtimeVoiceEventCapturingSessionHarness<TForcedConsultContext> {
+  return createRealtimeVoiceSessionHarnessImplementation(
+    params,
+    true,
+  ) as RealtimeVoiceEventCapturingSessionHarness<TForcedConsultContext>;
+}
+
+function createRealtimeVoiceSessionHarnessImplementation<TForcedConsultContext = unknown>(
+  params: RealtimeVoiceEventCapturingSessionHarnessParams,
+  captureEvents: boolean,
+): RealtimeVoiceSessionHarnessImplementation<TForcedConsultContext> {
   let closed = false;
   let bridge: RealtimeVoiceBridgeSession | undefined;
   let lastInputAt: string | undefined;
@@ -250,17 +283,17 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
     emit: (input) => talk.emit(input),
     ensureTurn() {
       const result = ensureTurnWithEvents();
-      return params.returnEvents ? result : result.turnId;
+      return captureEvents ? result : result.turnId;
     },
     endTurn(reason = "completed") {
       const result = talk.endTurn({ payload: params.talkPayloads.turnEnded(reason) });
-      return params.returnEvents ? result : undefined;
+      return captureEvents ? result : undefined;
     },
     finishOutputAudio(reason, details) {
       const result = talk.finishOutputAudio({
         payload: params.talkPayloads.outputAudioDone(reason, details),
       });
-      return params.returnEvents ? result : undefined;
+      return captureEvents ? result : undefined;
     },
     flushOutput,
     getHealth(healthParams) {
@@ -313,7 +346,7 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       if (Date.now() < suppressInputUntilMs) {
         lastSuppressedInputAt = new Date().toISOString();
         suppressedInputBytes += audio.byteLength;
-        return params.returnEvents ? undefined : false;
+        return captureEvents ? undefined : false;
       }
       lastInputAt = new Date().toISOString();
       lastInputBytes += audio.byteLength;
@@ -323,7 +356,7 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
         turnId: turn.turnId,
         payload: params.talkPayloads.inputAudioDelta(audio),
       });
-      return params.returnEvents ? { inputAudioDelta, turn } : true;
+      return captureEvents ? { inputAudioDelta, turn } : true;
     },
     recordOutputAudio(audio: Buffer, activity: RealtimeVoiceOutputActivityDelta = {}) {
       const turn = ensureTurnWithEvents();
@@ -356,7 +389,7 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
         sinkAudioBytes: activity.sinkAudioBytes ?? audio.byteLength,
       });
       lastOutputAt = new Date().toISOString();
-      return params.returnEvents
+      return captureEvents
         ? {
             outputAudioDelta,
             ...(output.event ? { outputAudioStarted: output.event } : {}),
@@ -367,7 +400,5 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
     recordTranscript: (role, text) => recordRealtimeVoiceTranscript(transcript, role, text),
   };
 
-  return harness as
-    | RealtimeVoiceSessionHarness<TForcedConsultContext>
-    | RealtimeVoiceSessionHarness<TForcedConsultContext, true>;
+  return harness;
 }

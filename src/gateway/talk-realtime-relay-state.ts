@@ -10,7 +10,7 @@ import type {
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
 } from "../talk/provider-types.js";
-import type { RealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
+import type { RealtimeVoiceEventCapturingSessionHarness } from "../talk/realtime-session-harness.js";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type { TalkEvent } from "../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -89,7 +89,7 @@ export type RelaySession = {
   connId: string;
   context: GatewayRequestContext;
   bridge: RealtimeVoiceBridgeSession;
-  harness: RealtimeVoiceSessionHarness<unknown, true>;
+  harness: RealtimeVoiceEventCapturingSessionHarness;
   sessionKey?: string;
   agentId?: string;
   expiresAtMs: number;

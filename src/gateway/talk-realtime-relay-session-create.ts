@@ -15,7 +15,7 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceCloseReason,
 } from "../talk/provider-types.js";
-import { createRealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
+import { createRealtimeVoiceEventCapturingSessionHarness } from "../talk/realtime-session-harness.js";
 import type { TalkEvent, TalkEventInput } from "../talk/talk-session-controller.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../talk/voice-transcript.js";
 import { registerChatAbortController } from "./chat-abort.js";
@@ -79,8 +79,7 @@ export function createTalkRealtimeRelaySession(
   if (expiresAtMs === undefined) {
     throw new Error("Realtime relay session expiry is outside the supported Date range");
   }
-  const harness = createRealtimeVoiceSessionHarness({
-    returnEvents: true,
+  const harness = createRealtimeVoiceEventCapturingSessionHarness({
     talk: {
       sessionId: relaySessionId,
       mode: "realtime",

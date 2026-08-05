@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import * as realtimeVoiceSdk from "./realtime-voice.js";
 import {
   createRealtimeVoiceAudioQueue,
+  createRealtimeVoiceSessionHarness,
   RealtimeVoiceSessionLifecycle,
   type RealtimeVoiceSessionConnection,
+  type RealtimeVoiceSessionHarness,
 } from "./realtime-voice.js";
 
 function connectLifecycle(
@@ -233,6 +236,42 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     lifecycle.enqueuePendingAudio(Buffer.from([0x04]));
     lifecycle.cancel();
     expect(lifecycle.drainPendingAudio()).toEqual([]);
+  });
+});
+
+describe("realtime voice session harness SDK contract", () => {
+  it("keeps legacy helper results for plugin consumers", () => {
+    const harness: RealtimeVoiceSessionHarness = createRealtimeVoiceSessionHarness({
+      talk: {
+        sessionId: "plugin-session",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "test",
+      },
+      talkPayloads: {
+        turnStarted: () => ({}),
+        turnEnded: (reason) => ({ reason }),
+        inputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
+        outputAudioStarted: () => ({}),
+        outputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
+        outputAudioDone: (reason) => ({ reason }),
+      },
+    });
+
+    expect(harness.ensureTurn()).toBe("turn-1");
+    expect(harness.recordInputAudio(Buffer.from([1]))).toBe(true);
+    expect(harness.recordOutputAudio(Buffer.from([2]))).toBeUndefined();
+    expect(harness.finishOutputAudio("completed")).toBeUndefined();
+    expect(harness.endTurn("completed")).toBeUndefined();
+    expectTypeOf<RealtimeVoiceSessionHarness["ensureTurn"]>().returns.toEqualTypeOf<string>();
+    expectTypeOf<
+      RealtimeVoiceSessionHarness["recordInputAudio"]
+    >().returns.toEqualTypeOf<boolean>();
+    expectTypeOf<RealtimeVoiceSessionHarness["recordOutputAudio"]>().returns.toEqualTypeOf<void>();
+    expectTypeOf<RealtimeVoiceSessionHarness["finishOutputAudio"]>().returns.toEqualTypeOf<void>();
+    expectTypeOf<RealtimeVoiceSessionHarness["endTurn"]>().returns.toEqualTypeOf<void>();
+    expect("createRealtimeVoiceEventCapturingSessionHarness" in realtimeVoiceSdk).toBe(false);
   });
 });
 

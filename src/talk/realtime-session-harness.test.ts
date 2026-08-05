@@ -2,7 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceBridge } from "./provider-types.js";
-import { createRealtimeVoiceSessionHarness } from "./realtime-session-harness.js";
+import {
+  createRealtimeVoiceEventCapturingSessionHarness,
+  createRealtimeVoiceSessionHarness,
+} from "./realtime-session-harness.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -70,9 +73,13 @@ describe("realtime voice session harness", () => {
   });
 
   it("returns the exact Talk events emitted by audio helpers", () => {
-    const harness = createRealtimeVoiceSessionHarness({
+    const harness = createRealtimeVoiceEventCapturingSessionHarness({
       ...defaultHarnessParams,
-      returnEvents: true,
+      talkPayloads: {
+        ...defaultHarnessParams.talkPayloads,
+        outputAudioDone: (reason, details) =>
+          details?.markName ? { markName: details.markName } : { reason },
+      },
     });
 
     const input = harness.recordInputAudio(Buffer.from([1, 2]));
@@ -91,7 +98,7 @@ describe("realtime voice session harness", () => {
     expect(done).toMatchObject({
       type: "output.audio.done",
       turnId: "turn-1",
-      payload: { reason: "mark" },
+      payload: { markName: "played" },
     });
     expect(input?.turn.event).toBe(harness.talk.recentEvents[0]);
     expect(input?.inputAudioDelta).toBe(harness.talk.recentEvents[1]);
