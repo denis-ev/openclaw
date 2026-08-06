@@ -66,6 +66,11 @@ export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
   init?: RequestInit;
+  /**
+   * Fires once after preflight and after the first fetch invocation returns,
+   * before awaiting its response. Redirect hops remain one SDK fetch attempt.
+   */
+  onFetchEgress?: () => void;
   capture?:
     | false
     | {
@@ -518,6 +523,7 @@ async function fetchWithSsrFGuardInternal(
   let currentInit = normalizeRequestInitHeadersForFetch(
     params.init ? { ...params.init } : undefined,
   );
+  let didNotifyFetchEgress = false;
   const visited = new Set<string>([getRedirectVisitKey(currentUrl, currentInit)]);
   let redirectCount = 0;
 
@@ -654,9 +660,18 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      const response = shouldUseRuntimeFetch
-        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-        : await defaultFetch(parsedUrl.toString(), init);
+      const responsePromise = shouldUseRuntimeFetch
+        ? fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+        : defaultFetch(parsedUrl.toString(), init);
+      if (!didNotifyFetchEgress) {
+        didNotifyFetchEgress = true;
+        try {
+          params.onFetchEgress?.();
+        } catch {
+          // Transport accounting is observational and must never block egress.
+        }
+      }
+      const response = await responsePromise;
       const capturedByGlobalFetchPatch =
         !shouldUseRuntimeFetch &&
         isAmbientGlobalFetch({

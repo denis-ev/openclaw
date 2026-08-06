@@ -1,11 +1,14 @@
 import { AI_MODEL_TRANSPORT_OUTCOMES, type AiModelTransportEvent } from "@openclaw/ai";
 import {
+  hasTransportFallbackCause,
   isKnownValue,
   normalizeIdentity,
   normalizeTransportEvent,
   type LowerBoundScope,
 } from "./provider-transport-accounting-normalize.js";
 import {
+  countProviderTransportFallback,
+  lowerMissingTransportFallbackCause,
   projectProviderTransportAccounting,
   providerTransportAggregateKeyForEventType,
   retainProviderTransportEventDetail,
@@ -373,6 +376,10 @@ function applyAttempt(
     servingModel,
     outcome: event.outcome,
   };
+  call.fallbackCause =
+    event.outcome === "failed"
+      ? { transport: expectedTransport, reason: "stream_failure" }
+      : undefined;
   call.pendingTransportTarget = undefined;
   call.phase = undefined;
   countAttempt(event, state);
@@ -425,6 +432,10 @@ function applyConnection(
     call.currentTransport = event.transport;
   }
   call.nextConnectionOrdinal += 1;
+  call.fallbackCause =
+    event.outcome === "failed"
+      ? { transport: event.transport, reason: "connection_failure" }
+      : undefined;
   countConnection(event, state);
   return true;
 }
@@ -447,25 +458,19 @@ function applyTransportFallback(
     }
     return false;
   }
-  if (!bindOrValidateCurrentTransport(call, event.fromTransport, state)) {
-    return false;
+  if (call.currentTransport && call.currentTransport !== event.fromTransport) {
+    return rejectFact(state, "transport_unknown_route", "event");
   }
+  if (!hasTransportFallbackCause(event, call)) {
+    lowerMissingTransportFallbackCause(event, state);
+    return rejectFact(state, "transport_invalid_fact", "event");
+  }
+  if (!call.currentTransport) {
+    call.currentTransport = event.fromTransport;
+  }
+  call.fallbackCause = undefined;
   call.pendingTransportTarget = event.toTransport;
-  state.aggregate.fallbacks.total += 1;
-  switch (event.reason) {
-    case "unsupported":
-      state.aggregate.fallbacks.unsupported += 1;
-      break;
-    case "connection_failure":
-      state.aggregate.fallbacks.connectionFailures += 1;
-      break;
-    case "stream_failure":
-      state.aggregate.fallbacks.streamFailures += 1;
-      break;
-    case "policy":
-      state.aggregate.fallbacks.policy += 1;
-      break;
-  }
+  countProviderTransportFallback(event, state);
   return true;
 }
 
@@ -602,6 +607,7 @@ export function createProviderTransportAccountingCollector(): ProviderTransportA
         total: 0,
         unsupported: 0,
         connectionFailures: 0,
+        submissionFailures: 0,
         streamFailures: 0,
         policy: 0,
       },

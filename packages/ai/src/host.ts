@@ -126,6 +126,7 @@ export const AI_MODEL_TRANSPORT_CONNECTION_REASONS = ["initial", "prewarm", "rec
 export const AI_MODEL_TRANSPORT_FALLBACK_REASONS = [
   "unsupported",
   "connection_failure",
+  "submission_failure",
   "stream_failure",
   "policy",
 ] as const;
@@ -226,7 +227,11 @@ export interface AiTransportHost {
   buildModelFetch(
     model: Model,
     timeoutMs?: number,
-    options?: { sanitizeSse?: boolean },
+    options?: {
+      sanitizeSse?: boolean;
+      /** Fires after the first fetch invocation returns, before awaiting its response. */
+      onFetchEgress?: () => void;
+    },
   ): typeof fetch | undefined;
   /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
   resolveSecretSentinel(value: string): string;

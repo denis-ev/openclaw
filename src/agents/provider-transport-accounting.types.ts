@@ -63,6 +63,7 @@ export type ProviderTransportAccountingSnapshot = {
   fallbacks: ProviderTransportTotals & {
     unsupported: number;
     connectionFailures: number;
+    submissionFailures: number;
     streamFailures: number;
     policy: number;
   };
