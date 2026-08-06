@@ -8,9 +8,11 @@ function readScript(pathname: string): string {
 
 describe("OpenClaw Docker E2E scripts", () => {
   it("keeps first-run checks wired to packaged CLI and OpenClaw behavior", () => {
+    const shell = readScript("scripts/e2e/system-agent-first-run-docker.sh");
     const source = readScript("test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts");
     const spec = readScript("scripts/e2e/system-agent-first-run-spec.json");
 
+    expect(shell).toContain('-e "OPENCLAW_SUPERVISOR_MODE=external"');
     expect(source).toContain("../../../../dist/cli/run-main.js");
     expect(source).toContain("../../../../dist/system-agent/setup-inference.js");
     expect(source).toContain("shouldStartOnboardingForFreshInstall");
