@@ -304,6 +304,7 @@ describe("registerTelegramNativeCommands", () => {
       { command: "operator_backup", description: "Operator backup" },
       { command: "operator_generate", description: "Operator generate" },
     ]);
+    expect(registeredCommands.some((entry) => entry.command === "status")).toBe(true);
     expect(registeredCommands.some((entry) => entry.command === "generated_0")).toBe(true);
     expect(registeredCommands.some((entry) => entry.command === "generated_99")).toBe(false);
   });
