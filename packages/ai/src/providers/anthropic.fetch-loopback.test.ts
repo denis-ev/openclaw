@@ -1,7 +1,11 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { configureAiTransportHost } from "../host.js";
+import {
+  configureAiTransportHost,
+  type AiModelTransportEvent,
+  type AiTransportHost,
+} from "../host.js";
 import type { Context, Model } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
 
@@ -30,6 +34,12 @@ function makeModel(overrides: Partial<Model<"anthropic-messages">>) {
     maxTokens: 4_096,
     ...overrides,
   } satisfies Model<"anthropic-messages">;
+}
+
+function serializeSse(events: Record<string, unknown>[]): string {
+  return events
+    .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join("");
 }
 
 afterEach(() => {
@@ -139,5 +149,274 @@ describe("Anthropic SDK host fetch wiring", () => {
     expect(buildModelFetch).toHaveBeenLastCalledWith(cases.at(-1)?.model, undefined, {
       sanitizeSse: false,
     });
+  });
+
+  it("counts each SDK retry only after guarded fetch egress", async () => {
+    const events: AiModelTransportEvent[] = [];
+    let requestCount = 0;
+    const server = createServer((_request, response) => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        response.writeHead(503, {
+          "content-type": "application/json",
+          "retry-after-ms": "0",
+        });
+        response.end(JSON.stringify({ error: { message: "retry" } }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        serializeSse([
+          {
+            type: "message_start",
+            message: {
+              id: "msg_retry",
+              model: "claude-sonnet-4-6",
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
+          },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ]),
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address() as AddressInfo;
+    const model = makeModel({ baseUrl: `http://127.0.0.1:${address.port}` });
+    const buildModelFetch: AiTransportHost["buildModelFetch"] = (_model, _timeout, options) => {
+      return async (input, init) => {
+        const responsePromise = globalThis.fetch(input, init);
+        options?.onFetchEgress?.();
+        return await responsePromise;
+      };
+    };
+    configureAiTransportHost({
+      buildModelFetch,
+      observeModelTransportEvent: (event) => events.push(event),
+    });
+
+    try {
+      const result = await streamAnthropic(model, context, {
+        apiKey: "sk-ant-api03-api-key", // pragma: allowlist secret
+        maxRetries: 1,
+        requestId: "call-sdk-retry",
+      }).result();
+      expect(result.stopReason).toBe("stop");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "attempt",
+        callId: "call-sdk-retry",
+        ordinal: 1,
+        reason: "initial",
+        outcome: "failed",
+        statusCode: 503,
+      }),
+      expect.objectContaining({
+        type: "attempt",
+        callId: "call-sdk-retry",
+        ordinal: 2,
+        reason: "retry",
+        outcome: "completed",
+        statusCode: 200,
+      }),
+    ]);
+  });
+
+  it("records zero submission when owned SDK preflight fails before egress", async () => {
+    const events: AiModelTransportEvent[] = [];
+    const hostFetch = vi.fn<typeof fetch>();
+    configureAiTransportHost({
+      buildModelFetch: (_model, _timeout, options) => async (input, init) => {
+        const responsePromise = hostFetch(input, init);
+        options?.onFetchEgress?.();
+        return await responsePromise;
+      },
+      observeModelTransportEvent: (event) => events.push(event),
+    });
+
+    const result = await streamAnthropic(makeModel({}), context, {
+      apiKey: "sk-ant-api03-api-key", // pragma: allowlist secret
+      requestId: "call-sdk-preflight",
+      onPayload: () => {
+        throw new Error("blocked before network");
+      },
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(hostFetch).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "submission",
+        callId: "call-sdk-preflight",
+        total: 0,
+        outcome: "failed",
+      }),
+    ]);
+  });
+
+  it("records a failed owned SDK attempt when EOF arrives before message_stop", async () => {
+    const events: AiModelTransportEvent[] = [];
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        serializeSse([
+          {
+            type: "message_start",
+            message: {
+              id: "msg_incomplete",
+              model: "claude-sonnet-4-6",
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
+          },
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "" },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "partial" },
+          },
+        ]),
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address() as AddressInfo;
+    const model = makeModel({ baseUrl: `http://127.0.0.1:${address.port}` });
+    configureAiTransportHost({
+      buildModelFetch: (_model, _timeout, options) => async (input, init) => {
+        const responsePromise = globalThis.fetch(input, init);
+        options?.onFetchEgress?.();
+        return await responsePromise;
+      },
+      observeModelTransportEvent: (event) => events.push(event),
+    });
+
+    try {
+      const result = await streamAnthropic(model, context, {
+        apiKey: "sk-ant-api03-api-key", // pragma: allowlist secret
+        maxRetries: 0,
+        requestId: "call-sdk-incomplete",
+      }).result();
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toContain("ended before message_stop");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "attempt",
+        callId: "call-sdk-incomplete",
+        outcome: "failed",
+        statusCode: 200,
+      }),
+    ]);
+  });
+
+  it("records owned SDK no-boundary fallback as one attempt and one transition", async () => {
+    const events: AiModelTransportEvent[] = [];
+    let requestCount = 0;
+    const server = createServer((_request, response) => {
+      requestCount += 1;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        serializeSse([
+          {
+            type: "message_start",
+            message: {
+              id: "msg_fallback",
+              model: "claude-opus-5",
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
+          },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: {
+              input_tokens: 1,
+              output_tokens: 1,
+              iterations: [
+                {
+                  type: "fallback_message",
+                  model: "claude-opus-5",
+                  input_tokens: 1,
+                  output_tokens: 1,
+                  cache_read_input_tokens: 0,
+                  cache_creation_input_tokens: 0,
+                  cache_creation: null,
+                },
+              ],
+            },
+          },
+          { type: "message_stop" },
+        ]),
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address() as AddressInfo;
+    const loopbackUrl = `http://127.0.0.1:${address.port}/v1/messages`;
+    configureAiTransportHost({
+      buildModelFetch: (_model, _timeout, options) => async (_input, init) => {
+        const responsePromise = globalThis.fetch(loopbackUrl, init);
+        options?.onFetchEgress?.();
+        return await responsePromise;
+      },
+      observeModelTransportEvent: (event) => events.push(event),
+    });
+
+    try {
+      const result = await streamAnthropic(
+        makeModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+        context,
+        {
+          apiKey: "sk-ant-api03-api-key", // pragma: allowlist secret
+          maxRetries: 0,
+          requestId: "call-sdk-fallback",
+        },
+      ).result();
+      expect(result.stopReason).toBe("stop");
+      expect(result.responseModel).toBe("claude-opus-5");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+
+    expect(requestCount).toBe(1);
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "provider_fallback",
+        callId: "call-sdk-fallback",
+        fromModel: "claude-fable-5",
+        toModel: "claude-opus-5",
+      }),
+      expect.objectContaining({
+        type: "attempt",
+        callId: "call-sdk-fallback",
+        ordinal: 1,
+        outcome: "completed",
+        statusCode: 200,
+      }),
+    ]);
   });
 });

@@ -50,6 +50,8 @@ import {
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
   ANTHROPIC_SERVER_SIDE_FALLBACKS,
   applyAnthropicFallbackBoundary,
+  applyAnthropicFallbackContentBoundary,
+  applyAnthropicFallbackServingModel,
   readAnthropicFallbackBoundary,
   resolveAnthropicFallbackServingModelCost,
 } from "../providers/anthropic-server-fallback.js";
@@ -66,6 +68,12 @@ import {
   toClaudeCodeToolName,
   type AnthropicToolProjection,
 } from "../providers/anthropic-tool-projection.js";
+import {
+  createAnthropicTransportAccounting,
+  inheritAnthropicTransportAccountingContext,
+  type AnthropicFallbackResolution,
+  type AnthropicTransportAccounting,
+} from "../providers/anthropic-transport-accounting.js";
 import {
   applyAnthropicMessageDeltaUsage,
   applyAnthropicMessageStartUsage,
@@ -186,6 +194,20 @@ type MutableAssistantOutput = {
   errorMessage?: string;
   diagnostics?: AssistantMessageDiagnostic[];
 };
+
+function applyAnthropicFallbackResolution(params: {
+  model: AnthropicTransportModel;
+  output: MutableAssistantOutput;
+  resolution: AnthropicFallbackResolution;
+}): void {
+  for (const transition of params.resolution.productTransitions) {
+    applyAnthropicFallbackServingModel({
+      output: params.output,
+      boundary: transition,
+      provider: params.model.provider,
+    });
+  }
+}
 
 const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
 
@@ -815,16 +837,26 @@ function createAnthropicTransportClient(params: {
   context: Context;
   apiKey: string;
   options: AnthropicTransportOptions | undefined;
+  transportAccounting?: AnthropicTransportAccounting;
 }) {
-  const { model, context, apiKey, options } = params;
+  const { model, context, apiKey, options, transportAccounting } = params;
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsClaudeAdaptiveThinking(model);
   // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
   // the OpenAI SDK compatibility sanitizer can stall before the text block.
-  const fetch =
-    isKimiAnthropicProvider(model.provider) && options?.thinkingEnabled === true
+  const fetch = transportAccounting
+    ? isKimiAnthropicProvider(model.provider) && options?.thinkingEnabled === true
+      ? buildGuardedModelFetch(model, undefined, {
+          sanitizeSse: false,
+          onFetchEgress: transportAccounting.onFetchEgress,
+        })
+      : buildGuardedModelFetch(model, undefined, {
+          onFetchEgress: transportAccounting.onFetchEgress,
+        })
+    : isKimiAnthropicProvider(model.provider) && options?.thinkingEnabled === true
       ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
       : buildGuardedModelFetch(model);
+  const accountingFetch = transportAccounting?.wrapFetch(fetch) ?? fetch;
   if (model.provider === "github-copilot") {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
@@ -842,7 +874,7 @@ function createAnthropicTransportClient(params: {
           getAiTransportHost().buildCopilotDynamicHeaders(context.messages),
           options?.headers,
         ),
-        fetch,
+        fetch: accountingFetch,
       }),
       isOAuthToken: false,
     };
@@ -863,7 +895,7 @@ function createAnthropicTransportClient(params: {
           omitFoundryBearerCredentialHeaders(model.headers),
           options?.headers,
         ),
-        fetch,
+        fetch: accountingFetch,
       }),
       isOAuthToken: false,
     };
@@ -890,7 +922,7 @@ function createAnthropicTransportClient(params: {
           model.headers,
           options?.headers,
         ),
-        fetch,
+        fetch: accountingFetch,
       }),
       isOAuthToken: true,
     };
@@ -912,7 +944,7 @@ function createAnthropicTransportClient(params: {
         model.headers,
         options?.headers,
       ),
-      fetch,
+      fetch: accountingFetch,
     }),
     isOAuthToken: false,
   };
@@ -1080,12 +1112,13 @@ function resolveAnthropicTransportOptions(
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const reasoning =
     options?.reasoning === "off" && mandatoryAdaptiveThinking ? "low" : options?.reasoning;
-  const resolved: AnthropicTransportOptions = {
+  const resolved = inheritAnthropicTransportAccountingContext<AnthropicTransportOptions>(options, {
     temperature: options?.temperature,
     stop: options?.stop,
     maxTokens: baseMaxTokens,
     signal: options?.signal,
     apiKey,
+    requestId: options?.requestId,
     cacheRetention: options?.cacheRetention,
     sessionId: options?.sessionId,
     headers: options?.headers,
@@ -1096,7 +1129,7 @@ function resolveAnthropicTransportOptions(
     toolChoice: options?.toolChoice,
     thinkingBudgets: options?.thinkingBudgets,
     reasoning,
-  };
+  });
   if (reasoning === "off") {
     resolved.thinkingEnabled = false;
     return resolved;
@@ -1157,6 +1190,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
       // swaps this to the fallback model's cost table.
       let costModel = model;
       let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
+      let transportAccounting: AnthropicTransportAccounting | undefined;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -1164,11 +1198,21 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         }
         const transportOptions = resolveAnthropicTransportOptions(model, options, apiKey);
         const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
+        const serverSideFallback =
+          !isAnthropicOAuthToken(apiKey) && useAnthropicServerSideFallback(model);
+        transportAccounting = transportOptions.requestId
+          ? createAnthropicTransportAccounting({
+              model,
+              options: transportOptions,
+              serverFallbackEnabled: serverSideFallback,
+            })
+          : undefined;
         const { client, isOAuthToken } = createAnthropicTransportClient({
           model,
           context: requestContext,
           apiKey,
           options: transportOptions,
+          transportAccounting,
         });
         const builtParams = await buildAnthropicParams(
           model,
@@ -1351,23 +1395,25 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               pendingTextEnds.length = 0;
               blockIndexes.clear();
               pendingThinkingSignatures.clear();
-              applyAnthropicFallbackBoundary({
-                output,
-                boundary: fallbackBoundary,
-                provider: model.provider,
-              });
-              // Cost intentionally mirrors top-level usage (serving attempt at
-              // serving-model rates). A mid-stream decline's billed partial is
-              // only in usage.iterations and is not folded in here.
-              costModel = {
-                ...model,
-                cost: resolveAnthropicFallbackServingModelCost({
-                  requestedModelId: model.id,
-                  servingModelId: fallbackBoundary.toModel,
-                  requestedCost: model.cost,
-                }),
-              };
-              calculateCost(costModel, output.usage);
+              if (transportAccounting) {
+                applyAnthropicFallbackContentBoundary(output);
+                transportAccounting.observeFallbackBoundary(fallbackBoundary);
+              } else {
+                applyAnthropicFallbackBoundary({
+                  output,
+                  boundary: fallbackBoundary,
+                  provider: model.provider,
+                });
+                costModel = {
+                  ...model,
+                  cost: resolveAnthropicFallbackServingModelCost({
+                    requestedModelId: model.id,
+                    servingModelId: fallbackBoundary.toModel,
+                    requestedCost: model.cost,
+                  }),
+                };
+                calculateCost(costModel, output.usage);
+              }
               eventSink.push({ type: "start", partial: output as never });
               for (const [i, block] of output.content.entries()) {
                 if (block.type !== "text") {
@@ -1673,6 +1719,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               }
             }
             applyAnthropicMessageDeltaUsage(output.usage, usage, messageStartPromptUsage);
+            transportAccounting?.observeTerminalUsage(usage);
             calculateCost(costModel, output.usage);
             // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
             // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
@@ -1686,7 +1733,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             flushPendingTextEnds();
           }
         }
-        if (refusalBuffer && !sawMessageStop) {
+        if (!sawMessageStop) {
           throw new Error("Anthropic stream ended before message_stop");
         }
         if (transportOptions.signal?.aborted) {
@@ -1694,6 +1741,27 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error(output.errorMessage ?? "An unknown error occurred");
+        }
+        if (transportAccounting) {
+          const fallbackResolution = transportAccounting.completeSuccess();
+          applyAnthropicFallbackResolution({
+            model,
+            output,
+            resolution: fallbackResolution,
+          });
+          const servingModel =
+            fallbackResolution.servingModel ??
+            fallbackResolution.productTransitions.at(-1)?.toModel ??
+            null;
+          costModel = {
+            ...model,
+            cost: resolveAnthropicFallbackServingModelCost({
+              requestedModelId: model.id,
+              servingModelId: servingModel,
+              requestedCost: model.cost,
+            }),
+          };
+          calculateCost(costModel, output.usage);
         }
         refusalBuffer?.flush();
         // Backstop: streaming tags commentary at the tool-boundary above, but
@@ -1710,6 +1778,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         flushPendingTextEnds();
         finalizeTransportStream({ stream, output });
       } catch (error) {
+        transportAccounting?.fail(error);
         if (refusalBuffer) {
           refusalBuffer.discard();
           output.content = [];

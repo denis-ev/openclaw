@@ -1,6 +1,7 @@
 import type { Model } from "@openclaw/llm-core";
 import {
   getAiTransportHost,
+  type AiModelTransportEvent,
   type AiModelTransportAttemptReason,
   type AiModelTransportConnectionReason,
   type AiModelTransportFallbackReason,
@@ -32,6 +33,7 @@ export type ModelTransportEventScope = {
     toTransport: string;
     reason: ModelTransportFallbackReason;
   }): void;
+  observeProviderFallback(params: { transport: string; fromModel: string; toModel: string }): void;
   observeZeroSubmission(params: { transport: string; outcome: AiModelZeroSubmissionOutcome }): void;
 };
 
@@ -44,9 +46,7 @@ function durationSince(startedAt: number): number {
   return Number.isFinite(duration) ? Math.max(0, duration) : 0;
 }
 
-function observeModelTransportEvent(
-  event: Parameters<ReturnType<typeof getAiTransportHost>["observeModelTransportEvent"]>[0],
-): void {
+export function observeModelTransportEventSafely(event: AiModelTransportEvent): void {
   try {
     getAiTransportHost().observeModelTransportEvent(event);
   } catch {
@@ -73,6 +73,8 @@ export function createModelTransportEventScope(params: {
   model: Model;
   callId?: string;
   scopeId: string;
+  eventIdPrefix?: string;
+  observeEvent?: (event: AiModelTransportEvent) => void;
 }): ModelTransportEventScope {
   const callId = params.callId?.trim();
   const routeHash = shortHash(
@@ -81,7 +83,10 @@ export function createModelTransportEventScope(params: {
   let attemptOrdinal = 0;
   let connectionOrdinal = 0;
   let fallbackOrdinal = 0;
+  let providerFallbackOrdinal = 0;
   let submissionOrdinal = 0;
+  const eventIdPrefix = params.eventIdPrefix ?? "openai";
+  const observeEvent = params.observeEvent ?? observeModelTransportEventSafely;
 
   return {
     startAttempt({ transport, reason }) {
@@ -91,9 +96,9 @@ export function createModelTransportEventScope(params: {
         if (!callId) {
           return;
         }
-        observeModelTransportEvent({
+        observeEvent({
           type: "attempt",
-          eventId: `openai:${routeHash}:attempt:${ordinal}`,
+          eventId: `${eventIdPrefix}:${routeHash}:attempt:${ordinal}`,
           callId,
           provider: params.model.provider,
           model: params.model.id,
@@ -114,9 +119,9 @@ export function createModelTransportEventScope(params: {
         if (!callId) {
           return;
         }
-        observeModelTransportEvent({
+        observeEvent({
           type: "connection",
-          eventId: `openai:${routeHash}:connection:${ordinal}`,
+          eventId: `${eventIdPrefix}:${routeHash}:connection:${ordinal}`,
           callId,
           provider: params.model.provider,
           model: params.model.id,
@@ -135,9 +140,9 @@ export function createModelTransportEventScope(params: {
         return;
       }
       fallbackOrdinal += 1;
-      observeModelTransportEvent({
+      observeEvent({
         type: "fallback",
-        eventId: `openai:${routeHash}:fallback:${fallbackOrdinal}`,
+        eventId: `${eventIdPrefix}:${routeHash}:fallback:${fallbackOrdinal}`,
         callId,
         provider: params.model.provider,
         model: params.model.id,
@@ -147,14 +152,31 @@ export function createModelTransportEventScope(params: {
         reason,
       });
     },
+    observeProviderFallback({ transport, fromModel, toModel }) {
+      if (!callId) {
+        return;
+      }
+      providerFallbackOrdinal += 1;
+      observeEvent({
+        type: "provider_fallback",
+        eventId: `${eventIdPrefix}:${routeHash}:provider-fallback:${providerFallbackOrdinal}`,
+        callId,
+        provider: params.model.provider,
+        model: params.model.id,
+        api: params.model.api,
+        transport,
+        fromModel,
+        toModel,
+      });
+    },
     observeZeroSubmission({ transport, outcome }) {
       if (!callId) {
         return;
       }
       submissionOrdinal += 1;
-      observeModelTransportEvent({
+      observeEvent({
         type: "submission",
-        eventId: `openai:${routeHash}:submission:${submissionOrdinal}`,
+        eventId: `${eventIdPrefix}:${routeHash}:submission:${submissionOrdinal}`,
         callId,
         provider: params.model.provider,
         model: params.model.id,

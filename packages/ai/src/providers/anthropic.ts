@@ -20,6 +20,7 @@ import {
 import { calculateCost } from "../model-utils.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import { applyAnthropicCacheControlToMessages } from "../transports/anthropic-payload-policy.js";
+import { buildGuardedModelFetch } from "../transports/host-policy.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
@@ -73,6 +74,8 @@ import {
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
   ANTHROPIC_SERVER_SIDE_FALLBACKS,
   applyAnthropicFallbackBoundary,
+  applyAnthropicFallbackContentBoundary,
+  applyAnthropicFallbackServingModel,
   readAnthropicFallbackBoundary,
   resolveAnthropicFallbackServingModelCost,
 } from "./anthropic-server-fallback.js";
@@ -89,6 +92,12 @@ import {
   toClaudeCodeToolName,
   type AnthropicToolProjection,
 } from "./anthropic-tool-projection.js";
+import {
+  createAnthropicTransportAccounting,
+  inheritAnthropicTransportAccountingContext,
+  type AnthropicFallbackResolution,
+  type AnthropicTransportAccounting,
+} from "./anthropic-transport-accounting.js";
 import {
   applyAnthropicMessageDeltaUsage,
   applyAnthropicMessageStartUsage,
@@ -262,15 +271,11 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
   "content_block_stop",
 ]);
 
-async function* iterateAnthropicEvents(
-  response: Response,
-  requireMessageStop = false,
-): AsyncGenerator<RawMessageStreamEvent> {
+async function* iterateAnthropicEvents(response: Response): AsyncGenerator<RawMessageStreamEvent> {
   if (!response.body) {
     throw new Error("Attempted to iterate over an Anthropic response with no body");
   }
 
-  let sawMessageStart = false;
   let sawMessageEnd = false;
 
   for await (const sse of Stream.rawEvents(response)) {
@@ -284,9 +289,7 @@ async function* iterateAnthropicEvents(
 
     try {
       const event = parseJsonWithRepair(sse.data) as RawMessageStreamEvent;
-      if (event.type === "message_start") {
-        sawMessageStart = true;
-      } else if (event.type === "message_stop") {
+      if (event.type === "message_stop") {
         sawMessageEnd = true;
       }
       yield event;
@@ -300,8 +303,22 @@ async function* iterateAnthropicEvents(
     }
   }
 
-  if ((sawMessageStart || requireMessageStop) && !sawMessageEnd) {
+  if (!sawMessageEnd) {
     throw new Error("Anthropic stream ended before message_stop");
+  }
+}
+
+function applyAnthropicFallbackResolution(params: {
+  model: Model<"anthropic-messages">;
+  output: AssistantMessage;
+  resolution: AnthropicFallbackResolution;
+}): void {
+  for (const transition of params.resolution.productTransitions) {
+    applyAnthropicFallbackServingModel({
+      output: params.output,
+      boundary: transition,
+      provider: params.model.provider,
+    });
   }
 }
 
@@ -344,6 +361,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
     // swaps this to the fallback model's cost table.
     let costModel = model;
     let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
+    let transportAccounting: AnthropicTransportAccounting | undefined;
 
     try {
       let client: Anthropic;
@@ -371,6 +389,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         const cacheRetention = requestOptions?.cacheRetention ?? resolveCacheRetention();
         const cacheSessionId = cacheRetention === "none" ? undefined : requestOptions?.sessionId;
 
+        serverSideFallback = !isOAuthToken(apiKey) && supportsAnthropicServerSideFallback(model);
+        transportAccounting = requestOptions?.requestId
+          ? createAnthropicTransportAccounting({
+              model,
+              options: requestOptions,
+              serverFallbackEnabled: serverSideFallback,
+            })
+          : undefined;
         const created = createClient(
           model,
           apiKey,
@@ -380,6 +406,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           requestOptions?.headers,
           copilotDynamicHeaders,
           cacheSessionId,
+          transportAccounting,
         );
         client = created.client;
         isOAuth = created.isOAuthToken;
@@ -418,7 +445,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       const blocks = output.content as Block[];
       const blockIndexes = new Map<number, number>();
 
-      for await (const event of iterateAnthropicEvents(response, refusalBuffer !== undefined)) {
+      for await (const event of iterateAnthropicEvents(response)) {
         if (event.type === "message_start") {
           output.responseId = event.message.id;
           output.responseModel = event.message.model;
@@ -443,23 +470,25 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             // surviving text prefix the fallback model continued from.
             refusalBuffer?.discard();
             blockIndexes.clear();
-            applyAnthropicFallbackBoundary({
-              output,
-              boundary: fallbackBoundary,
-              provider: model.provider,
-            });
-            // Cost intentionally mirrors top-level usage (serving attempt at
-            // serving-model rates). A mid-stream decline's billed partial is
-            // only in usage.iterations and is not folded in here.
-            costModel = {
-              ...model,
-              cost: resolveAnthropicFallbackServingModelCost({
-                requestedModelId: model.id,
-                servingModelId: fallbackBoundary.toModel,
-                requestedCost: model.cost,
-              }),
-            };
-            calculateCost(costModel, output.usage);
+            if (transportAccounting) {
+              applyAnthropicFallbackContentBoundary(output);
+              transportAccounting.observeFallbackBoundary(fallbackBoundary);
+            } else {
+              applyAnthropicFallbackBoundary({
+                output,
+                boundary: fallbackBoundary,
+                provider: model.provider,
+              });
+              costModel = {
+                ...model,
+                cost: resolveAnthropicFallbackServingModelCost({
+                  requestedModelId: model.id,
+                  servingModelId: fallbackBoundary.toModel,
+                  requestedCost: model.cost,
+                }),
+              };
+              calculateCost(costModel, output.usage);
+            }
             eventSink.push({ type: "start", partial: output });
             for (const [i, block] of blocks.entries()) {
               if (block.type !== "text") {
@@ -635,6 +664,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           if (event.usage) {
             applyAnthropicMessageDeltaUsage(output.usage, event.usage, messageStartPromptUsage);
           }
+          transportAccounting?.observeTerminalUsage(event.usage);
           calculateCost(costModel, output.usage);
         }
       }
@@ -647,10 +677,32 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         throw new Error(output.errorMessage ?? "An unknown error occurred");
       }
 
+      const fallbackResolution = transportAccounting?.completeSuccess();
+      if (fallbackResolution) {
+        applyAnthropicFallbackResolution({
+          model,
+          output,
+          resolution: fallbackResolution,
+        });
+        const servingModel =
+          fallbackResolution.servingModel ??
+          fallbackResolution.productTransitions.at(-1)?.toModel ??
+          null;
+        costModel = {
+          ...model,
+          cost: resolveAnthropicFallbackServingModelCost({
+            requestedModelId: model.id,
+            servingModelId: servingModel,
+            requestedCost: model.cost,
+          }),
+        };
+        calculateCost(costModel, output.usage);
+      }
       refusalBuffer?.flush();
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
+      transportAccounting?.fail(error);
       for (const block of output.content) {
         delete (block as { index?: number }).index;
         // partialJson is only a streaming scratch buffer; never persist it.
@@ -710,11 +762,12 @@ export const streamSimpleAnthropic: StreamFunction<
     throw new Error(`No API key for provider: ${model.provider}`);
   }
 
-  const base = {
+  const base = inheritAnthropicTransportAccountingContext(options, {
     ...buildBaseOptions(model, options, apiKey),
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
+    requestId: options?.requestId,
     toolChoice: options?.toolChoice,
-  };
+  });
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   if (options?.reasoning === "off" && !mandatoryAdaptiveThinking) {
     return streamAnthropic(model, context, {
@@ -819,6 +872,7 @@ function createClient(
   optionsHeaders?: Record<string, string>,
   dynamicHeaders?: Record<string, string>,
   sessionId?: string,
+  transportAccounting?: AnthropicTransportAccounting,
 ): { client: Anthropic; isOAuthToken: boolean; serverSideFallback: boolean } {
   // Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
   // The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
@@ -830,12 +884,16 @@ function createClient(
   if (needsInterleavedBeta) {
     betaFeatures.push(INTERLEAVED_THINKING_BETA);
   }
-  const fetchOptions =
-    /^kimi(?:-|$)/.test(model.provider) && thinkingEnabled
+  const fetchOptions = transportAccounting
+    ? /^kimi(?:-|$)/.test(model.provider) && thinkingEnabled
+      ? { sanitizeSse: false as const, onFetchEgress: transportAccounting.onFetchEgress }
+      : { onFetchEgress: transportAccounting.onFetchEgress }
+    : /^kimi(?:-|$)/.test(model.provider) && thinkingEnabled
       ? { sanitizeSse: false as const }
       : undefined;
   // Anthropic supports custom fetch, so sentinels stay opaque until guarded egress.
-  const fetch = getAiTransportHost().buildModelFetch(model, undefined, fetchOptions);
+  const guardedFetch = buildGuardedModelFetch(model, undefined, fetchOptions);
+  const fetch = transportAccounting?.wrapFetch(guardedFetch) ?? guardedFetch;
 
   if (model.provider === "cloudflare-ai-gateway") {
     const client = new Anthropic({
