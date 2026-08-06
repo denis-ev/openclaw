@@ -35,6 +35,7 @@ export type EmbeddedRunOpaqueWorkReason =
 
 type EmbeddedRunAccountingObservers = {
   readonly codeModeActivityOwner?: CodeModeActivityOwner;
+  allocateDiagnosticModelCallId?: () => string;
   onAgentSubmission?: AgentSubmissionObserver;
   onAttemptObserved?: (observation: EmbeddedRunAccountingObservation) => void;
   onRuntimeSelected?: (runtime: "embedded" | "native") => void;
@@ -50,6 +51,7 @@ export function bindEmbeddedRunAccountingObservers<T extends object>(
 ): T {
   if (
     value?.codeModeActivityOwner ||
+    value?.allocateDiagnosticModelCallId ||
     value?.onAgentSubmission ||
     value?.onAttemptObserved ||
     value?.onRuntimeSelected ||
